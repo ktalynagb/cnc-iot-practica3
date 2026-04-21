@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class LecturaEntrada(BaseModel):
     """JSON que envía el ESP32."""
     temperatura: float = Field(..., ge=-40, le=80, description="°C — DHT22")
+    humedad: float = Field(50.0, ge=0, le=100, description="% — DHT22")
     accel_x: float = Field(..., description="m/s² eje X — MPU-6050")
     accel_y: float = Field(..., description="m/s² eje Y — MPU-6050")
     accel_z: float = Field(..., description="m/s² eje Z — MPU-6050")
@@ -14,6 +15,7 @@ class LecturaEntrada(BaseModel):
         "json_schema_extra": {
             "example": {
                 "temperatura": 28.5,
+                "humedad": 50.0,
                 "accel_x": 0.12,
                 "accel_y": -0.03,
                 "accel_z": 9.81,

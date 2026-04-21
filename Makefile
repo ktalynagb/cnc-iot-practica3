@@ -1,5 +1,5 @@
 # ============================================================
-#  CNC IoT — Makefile  (Windows-native / PowerShell)
+#  CNC IoT - Makefile  (Windows-native / PowerShell)
 #  Uso: make <comando>
 # ============================================================
 
@@ -22,28 +22,28 @@ NPM          := npm
 # ------------------------------------------------------------
 help:
 	@Write-Host ""
-	@Write-Host "   CNC IoT — comandos disponibles"
+	@Write-Host "   CNC IoT - comandos disponibles"
 	@Write-Host ""
 	@Write-Host "  BACKEND (local con uv)"
-	@Write-Host "    make setup           — Sincroniza dependencias y prepara .env"
-	@Write-Host "    make install         — cd backend && uv sync"
-	@Write-Host "    make run             — cd backend && uv run uvicorn app.main:app"
-	@Write-Host "    make test            — cd backend && uv run pytest"
-	@Write-Host "    make clean           — Borrar carpetas __pycache__"
+	@Write-Host "    make setup           - Sincroniza dependencias y prepara .env"
+	@Write-Host "    make install         - cd backend && uv sync"
+	@Write-Host "    make run             - cd backend && uv run uvicorn app.main:app"
+	@Write-Host "    make test            - cd backend && uv run pytest"
+	@Write-Host "    make clean           - Borrar carpetas __pycache__"
 	@Write-Host ""
 	@Write-Host "  FRONTEND (local con npm)"
-	@Write-Host "    make frontend-install — npm install en /frontend"
-	@Write-Host "    make frontend-dev     — npm run dev  (puerto 3000)"
-	@Write-Host "    make frontend-test    — npm test"
+	@Write-Host "    make frontend-install - npm install en /frontend"
+	@Write-Host "    make frontend-dev     - npm run dev  (puerto 3000)"
+	@Write-Host "    make frontend-test    - npm test"
 	@Write-Host ""
 	@Write-Host "  DOCKER"
-	@Write-Host "    make docker-up       — Construye e inicia todos los servicios"
-	@Write-Host "    make docker-down     — Detiene y elimina contenedores"
-	@Write-Host "    make docker-logs     — Muestra logs en tiempo real"
+	@Write-Host "    make docker-up       - Construye e inicia todos los servicios"
+	@Write-Host "    make docker-down     - Detiene y elimina contenedores"
+	@Write-Host "    make docker-logs     - Muestra logs en tiempo real"
 	@Write-Host ""
 
 # ------------------------------------------------------------
-# BACKEND — local con uv
+# BACKEND - local con uv
 # ------------------------------------------------------------
 setup: install env
 	@Write-Host "Setup completo. Edita $(BACKEND_DIR)\.env y ejecuta: make run"
@@ -56,7 +56,7 @@ install:
 env:
 	@if (-Not (Test-Path "$(BACKEND_DIR)\.env")) { \
 		Copy-Item "$(BACKEND_DIR)\.env.example" "$(BACKEND_DIR)\.env"; \
-		Write-Host "$(BACKEND_DIR)\.env creado — edítalo con tus valores."; \
+		Write-Host "$(BACKEND_DIR)\.env creado - edítalo con tus valores."; \
 	} else { \
 		Write-Host "$(BACKEND_DIR)\.env ya existe, no se sobreescribe."; \
 	}
@@ -76,7 +76,7 @@ clean:
 	@Write-Host "Limpieza completa."
 
 # ------------------------------------------------------------
-# FRONTEND — local con npm
+# FRONTEND - local con npm
 # ------------------------------------------------------------
 frontend-install:
 	@Write-Host "Instalando dependencias del frontend..."
