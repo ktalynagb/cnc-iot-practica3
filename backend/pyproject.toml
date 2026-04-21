@@ -15,6 +15,7 @@ dependencies = [
     "pytest",
     "pytest-asyncio",
     "ruff",
+    "requests>=2.33.1",
 ]
 
 [project.optional-dependencies]
