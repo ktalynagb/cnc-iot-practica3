@@ -24,7 +24,6 @@ def recibir_datos(payload: LecturaEntrada, db: Session = Depends(get_db)):
     lectura = Lectura(
         timestamp=datetime.now(timezone.utc),
         temperatura=payload.temperatura,
-        humedad=payload.humedad,
         accel_x=payload.accel_x,
         accel_y=payload.accel_y,
         accel_z=payload.accel_z,

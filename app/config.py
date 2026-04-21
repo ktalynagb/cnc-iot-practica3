@@ -19,8 +19,6 @@ class Settings(BaseSettings):
     # Umbrales de alerta
     TEMP_MIN: float = 15.0
     TEMP_MAX: float = 45.0
-    HUM_MIN: float = 20.0
-    HUM_MAX: float = 80.0
     ACCEL_MAX: float = 2.0
 
     class Config:

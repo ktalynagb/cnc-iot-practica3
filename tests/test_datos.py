@@ -36,7 +36,6 @@ client = TestClient(app)
 
 PAYLOAD_NORMAL = {
     "temperatura": 28.5,
-    "humedad": 65.2,
     "accel_x": 0.12,
     "accel_y": -0.03,
     "accel_z": 0.05,   # vibración baja — dentro del umbral de 2.0 m/s²
@@ -44,7 +43,6 @@ PAYLOAD_NORMAL = {
 
 PAYLOAD_ALERTA = {
     "temperatura": 60.0,   # fuera de rango
-    "humedad": 90.0,        # fuera de rango
     "accel_x": 5.0,
     "accel_y": 5.0,
     "accel_z": 5.0,         # vibración alta
