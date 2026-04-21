@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+backend/.env
 data/lecturas.csv
 test_temp.db
 .pytest_cache/
