@@ -1,11 +1,10 @@
 <#
-Deploy script para Azure: crea RG, VNet (public+private), ACI (frontend, backend, db), Application Gateway en public-subnet,
-y configura path-based routing: /datos/* -> backend privado.
-
-Uso:
-  - Copia .env.example -> .env y completa valores.
-  - az login
-  - ./deploy.ps1
+Deploy script maestro para Azure (Versión Final - Estable):
+- Crea RG, VNet (public + private).
+- Despliega AppGW vía CLI en puerto dummy (8080) temporalmente.
+- Despliega ACI con CPU/Memoria explícitos y Autenticación de Docker Hub (evita Rate Limits).
+- Corrige el ruteo interno: Frontend usa el puerto 3000 (Next.js), Backend usa el puerto 8000.
+- Configura proxy inverso: Tráfico raíz (puerto 80) -> Frontend(3000) | Tráfico /datos/* -> Backend(8000).
 #>
 
 param(
@@ -30,17 +29,18 @@ function Load-EnvFile($path) {
     }
 }
 
-# Cargar variables
+# 1. Cargar variables
 Load-EnvFile -path $EnvFile
 
-# Validar variables mínimas
+# Validar variables mínimas incluyendo credenciales Docker
 $required = @(
     "AZ_SUBSCRIPTION_ID","AZ_LOCATION","RG_NAME","VNET_NAME",
     "PUBLIC_SUBNET_NAME","PRIVATE_SUBNET_NAME","VNET_PREFIX",
     "PUBLIC_SUBNET_PREFIX","PRIVATE_SUBNET_PREFIX",
     "FRONTEND_IMAGE","BACKEND_IMAGE","DB_IMAGE",
     "ACI_FRONTEND_NAME","ACI_BACKEND_NAME","ACI_DB_NAME",
-    "DB_NAME","DB_USER","DB_PASSWORD","APPGW_NAME","PUBLIC_IP_NAME"
+    "DB_NAME","DB_USER","DB_PASSWORD","APPGW_NAME","PUBLIC_IP_NAME",
+    "DOCKER_USERNAME","DOCKER_PASSWORD"
 )
 foreach ($r in $required) {
     if (-not (Test-Path "env:$r")) {
@@ -49,7 +49,7 @@ foreach ($r in $required) {
     }
 }
 
-# Variables locales (casteo)
+# Variables locales
 $subId = $env:AZ_SUBSCRIPTION_ID
 $location = $env:AZ_LOCATION
 $rg = $env:RG_NAME
@@ -70,306 +70,73 @@ $dbImage = $env:DB_IMAGE
 $dbUser = $env:DB_USER
 $dbPass = $env:DB_PASSWORD
 $dbDatabase = $env:DB_NAME
-$frontendPort = if ($env:FRONTEND_PORT) { [int]$env:FRONTEND_PORT } else { 80 }
+$publicFrontendPort = if ($env:FRONTEND_PORT) { [int]$env:FRONTEND_PORT } else { 80 }
+$containerFrontendPort = 3000 # Next.js nativo
 $backendPort = if ($env:BACKEND_PORT) { [int]$env:BACKEND_PORT } else { 8000 }
 $dbPort = if ($env:DB_PORT) { [int]$env:DB_PORT } else { 5432 }
 $appgwSku = if ($env:APPGW_SKU) { $env:APPGW_SKU } else { "Standard_v2" }
 $appgwCapacity = if ($env:APPGW_CAPACITY) { [int]$env:APPGW_CAPACITY } else { 1 }
 
-# Set subscription
+# 2. Setup Base
 Write-Host "Seleccionando suscripción $subId..."
 az account set --subscription $subId
 
-# Crear resource group
 Write-Host "Creando resource group $rg ..."
 az group create --name $rg --location $location | Out-Null
 
-# Crear VNet con subnets
-Write-Host "Creando VNet $vnet con subnets $pubSubnet y $privSubnet..."
-az network vnet create `
-  --resource-group $rg `
-  --name $vnet `
-  --address-prefix $vnetPrefix `
-  --subnet-name $pubSubnet `
-  --subnet-prefix $pubPrefix `
-  --location $location | Out-Null
+Write-Host "Creando VNet y Subnets..."
+az network vnet create --resource-group $rg --name $vnet --address-prefix $vnetPrefix --subnet-name $pubSubnet --subnet-prefix $pubPrefix --location $location | Out-Null
+az network vnet subnet create --resource-group $rg --vnet-name $vnet --name $privSubnet --address-prefix $privPrefix | Out-Null
 
-# Añadir la segunda subnet (private)
-az network vnet subnet create `
-  --resource-group $rg `
-  --vnet-name $vnet `
-  --name $privSubnet `
-  --address-prefix $privPrefix | Out-Null
-
-# Obtener IDs de subnets
 $pubSubnetId = az network vnet subnet show --resource-group $rg --vnet-name $vnet --name $pubSubnet --query id -o tsv
 $privSubnetId = az network vnet subnet show --resource-group $rg --vnet-name $vnet --name $privSubnet --query id -o tsv
 
-Write-Host "public subnet id: $pubSubnetId"
-Write-Host "private subnet id: $privSubnetId"
-
-# Crear IP pública para AppGW
 Write-Host "Creando IP pública $publicIpName..."
 az network public-ip create --resource-group $rg --name $publicIpName --sku Standard --allocation-method Static | Out-Null
-$publicIp = az network public-ip show --resource-group $rg --name $publicIpName --query ipAddress -o tsv
-Write-Host "Public IP creada: $publicIp"
+$publicIp = az network public-ip show --resource-group $rg --name $publicIpName --query "ipAddress" -o tsv
 
-# Crear Application Gateway en public subnet (sin backend addresses específicos)
-Write-Host "Creando Application Gateway ($appgw) en la public-subnet ..."
-az network application-gateway create `
-  --name $appgw `
-  --resource-group $rg `
-  --location $location `
-  --sku $appgwSku `
-  --capacity $appgwCapacity `
-  --vnet-name $vnet `
-  --subnet $pubSubnet `
-  --public-ip-address $publicIpName `
-  --frontend-port $frontendPort `
-  --http-settings-protocol Http `
-  --no-wait
+# 3. Despliegue del Application Gateway
+Write-Host "Desplegando Application Gateway ($appgw) en puerto seguro (8080)..."
+az network application-gateway create --resource-group $rg --name $appgw --location $location --sku $appgwSku --capacity $appgwCapacity --vnet-name $vnet --subnet $pubSubnet --public-ip-address $publicIpName --frontend-port 8080 --priority 1000 | Out-Null
 
-Write-Host "Creación de AppGW iniciada. Esperando a que termine (puede tardar varios minutos)..."
+# 4. Despliegue de Contenedores ACI
+Write-Host "Desplegando base de datos (Autenticada)..."
+az container create --resource-group $rg --name $dbName --image $dbImage --os-type Linux --cpu 1.0 --memory 1.5 --subnet $privSubnetId --ports $dbPort --environment-variables POSTGRES_DB=$dbDatabase POSTGRES_USER=$dbUser POSTGRES_PASSWORD=$dbPass --ip-address Private --restart-policy OnFailure --registry-login-server index.docker.io --registry-username $env:DOCKER_USERNAME --registry-password $env:DOCKER_PASSWORD | Out-Null
+Start-Sleep -Seconds 15
+$dbPrivateIp = (az container show --resource-group $rg --name $dbName -o json | ConvertFrom-Json).ipAddress.ip
 
-# Esperar a que AppGW quede en provisioningState Succeeded (timeout configurable)
-$timeout = (Get-Date).AddMinutes($AppGwWaitTimeoutMins)
-while ($true) {
-    Start-Sleep -Seconds 10
-    $state = az network application-gateway show --resource-group $rg --name $appgw --query "provisioningState" -o tsv 2>$null
-    if ($state) {
-        Write-Host "AppGW provisioningState: $state"
-    } else {
-        Write-Host "AppGW aún no disponible (consulta falló), reintentando..."
-    }
-    if ($state -eq "Succeeded") { break }
-    if ((Get-Date) -gt $timeout) {
-        Write-Error "Timeout esperado para AppGW (esperado $AppGwWaitTimeoutMins mins). Revisa en el portal."
-        exit 1
-    }
-}
-
-# Desplegar DB container (en private subnet, IP privada)
-Write-Host "Desplegando base de datos ($dbImage) como ACI en private subnet..."
-az container create `
-  --resource-group $rg `
-  --name $dbName `
-  --image $dbImage `
-  --subnet $privSubnetId `
-  --ports $dbPort `
-  --environment-variables POSTGRES_DB=$dbDatabase POSTGRES_USER=$dbUser POSTGRES_PASSWORD=$dbPass `
-  --ip-address Private `
-  --restart-policy OnFailure | Out-Null
-
-# Esperar y obtener IP privada del DB
-Write-Host "Esperando a que el container DB inicialice..."
-Start-Sleep -Seconds 12
-$dbInfo = az container show --resource-group $rg --name $dbName -o json | ConvertFrom-Json
-$dbPrivateIp = $dbInfo.ipAddress.ip
-Write-Host "DB privada: $dbPrivateIp"
-
-# Deploy backend container (en private subnet)
-Write-Host "Desplegando backend ($backendImage) en private subnet..."
-az container create `
-  --resource-group $rg `
-  --name $backendName `
-  --image $backendImage `
-  --subnet $privSubnetId `
-  --ports $backendPort `
-  --environment-variables DB_HOST=$dbPrivateIp DB_PORT=$dbPort DB_NAME=$dbDatabase DB_USER=$dbUser DB_PASSWORD=$dbPass `
-  --ip-address Private `
-  --restart-policy OnFailure | Out-Null
-
+Write-Host "Desplegando backend..."
+az container create --resource-group $rg --name $backendName --image $backendImage --os-type Linux --cpu 1.0 --memory 1.5 --subnet $privSubnetId --ports $backendPort --environment-variables DB_HOST=$dbPrivateIp DB_PORT=$dbPort DB_NAME=$dbDatabase DB_USER=$dbUser DB_PASSWORD=$dbPass --ip-address Private --restart-policy OnFailure --registry-login-server index.docker.io --registry-username $env:DOCKER_USERNAME --registry-password $env:DOCKER_PASSWORD | Out-Null
 Start-Sleep -Seconds 10
-$backendInfo = az container show --resource-group $rg --name $backendName -o json | ConvertFrom-Json
-$backendPrivateIp = $backendInfo.ipAddress.ip
-Write-Host "Backend privada: $backendPrivateIp"
+$backendPrivateIp = (az container show --resource-group $rg --name $backendName -o json | ConvertFrom-Json).ipAddress.ip
 
-# Deploy frontend container (en private subnet, IP privada) - AppGW expondrá este servicio
-Write-Host "Desplegando frontend ($frontendImage) en private subnet..."
-az container create `
-  --resource-group $rg `
-  --name $frontendName `
-  --image $frontendImage `
-  --subnet $privSubnetId `
-  --ports $frontendPort `
-  --environment-variables BACKEND_URL="http://${backendPrivateIp}:${backendPort}" `
-  --ip-address Private `
-  --restart-policy OnFailure | Out-Null
-
+Write-Host "Desplegando frontend (Puerto $containerFrontendPort)..."
+az container create --resource-group $rg --name $frontendName --image $frontendImage --os-type Linux --cpu 1.0 --memory 1.5 --subnet $privSubnetId --ports $containerFrontendPort --environment-variables BACKEND_URL="http://${backendPrivateIp}:${backendPort}" --ip-address Private --restart-policy OnFailure --registry-login-server index.docker.io --registry-username $env:DOCKER_USERNAME --registry-password $env:DOCKER_PASSWORD | Out-Null
 Start-Sleep -Seconds 10
-$frontendInfo = az container show --resource-group $rg --name $frontendName -o json | ConvertFrom-Json
-$frontendPrivateIp = $frontendInfo.ipAddress.ip
-Write-Host "Frontend privada: $frontendPrivateIp"
+$frontendPrivateIp = (az container show --resource-group $rg --name $frontendName -o json | ConvertFrom-Json).ipAddress.ip
 
-# -----------------------
-# Configurar AppGW path-based routing (robusto)
-# -----------------------
+# 5. Configuración de Enrutamiento (Proxy Inverso)
+Write-Host "Configurando el Proxy Inverso (Rutas e IPs)..."
+az network application-gateway frontend-port create --gateway-name $appgw --resource-group $rg --name PortPublico --port $publicFrontendPort | Out-Null
 
-# Nombres de recursos AppGW que usaremos explícitamente
-$frontendIpNameCfg = "AppGwFrontendIP"
-$frontendPortNameCfg = "AppGwFrontendPort"
-$frontendListenerName = "AppGwFrontListener"
-$frontendPoolNameExplicit = "FrontendPoolExplicit"
-$pathMapName = "UrlPathMap"
-$datosRuleName = "DatosRule"
-$requestRoutingRuleName = "RequestRule-PathBased"
-$priorityValue = 100
+az network application-gateway address-pool create --gateway-name $appgw --resource-group $rg --name FrontendPoolExplicit --servers $frontendPrivateIp | Out-Null
+az network application-gateway address-pool create --gateway-name $appgw --resource-group $rg --name BackendPool --servers $backendPrivateIp | Out-Null
 
-Write-Host "Verificando si AppGW $appgw existe..."
-$appgwExists = az network application-gateway show --resource-group $rg --name $appgw -o json 2>$null | ConvertFrom-Json
-if (-not $appgwExists) {
-    Write-Error "App Gateway $appgw no encontrado. Revisa logs anteriores."
-    exit 1
-}
+az network application-gateway http-settings create --gateway-name $appgw --resource-group $rg --name FrontendHttpSettings --port $containerFrontendPort --protocol Http --cookie-based-affinity Disabled | Out-Null
+az network application-gateway http-settings create --gateway-name $appgw --resource-group $rg --name BackendHttpSettings --port $backendPort --protocol Http --cookie-based-affinity Disabled | Out-Null
 
-# Si existe alguna regla por defecto sin priority, eliminarla para evitar errores de plantilla
-Write-Host "Comprobando reglas existentes en AppGW..."
-$allRules = az network application-gateway rule list --gateway-name $appgw --resource-group $rg -o json | ConvertFrom-Json
-if ($allRules) {
-    foreach ($r in $allRules) {
-        # r.priority puede ser $null si no existe, o 0/valor
-        if (-not $r.priority) {
-            Write-Warning "Regla $($r.name) sin priority detectada. La eliminaré para reemplazar con reglas con priority."
-            az network application-gateway rule delete --gateway-name $appgw --resource-group $rg --name $r.name | Out-Null
-        }
-    }
-}
+az network application-gateway http-listener create --gateway-name $appgw --resource-group $rg --name AppGwFrontListener --frontend-port PortPublico --frontend-ip appGatewayFrontendIP | Out-Null
 
-# Crear Frontend IP config (apunta a la Public IP creada anteriormente)
-Write-Host "Creando Frontend IP config ($frontendIpNameCfg)..."
-az network application-gateway frontend-ip create `
-  --gateway-name $appgw `
-  --resource-group $rg `
-  --name $frontendIpNameCfg `
-  --public-ip-address $publicIpName | Out-Null
+az network application-gateway url-path-map create --gateway-name $appgw --resource-group $rg --name UrlPathMap --rule-name DatosRule --paths "/datos/*" --address-pool BackendPool --http-settings BackendHttpSettings --default-address-pool FrontendPoolExplicit --default-http-settings FrontendHttpSettings | Out-Null
 
-# Crear frontend port
-Write-Host "Creando Frontend Port ($frontendPortNameCfg) en puerto $frontendPort..."
-az network application-gateway frontend-port create `
-  --gateway-name $appgw `
-  --resource-group $rg `
-  --name $frontendPortNameCfg `
-  --port $frontendPort | Out-Null
+az network application-gateway rule create --gateway-name $appgw --resource-group $rg --name RequestRule-PathBased --rule-type PathBasedRouting --http-listener AppGwFrontListener --url-path-map UrlPathMap --priority 100 | Out-Null
 
-# Crear frontend listener
-Write-Host "Creando HTTP Listener ($frontendListenerName)..."
-az network application-gateway http-listener create `
-  --gateway-name $appgw `
-  --resource-group $rg `
-  --name $frontendListenerName `
-  --frontend-port $frontendPortNameCfg `
-  --frontend-ip $frontendIpNameCfg `
-  --protocol Http | Out-Null
+# 6. Limpieza de Puertos Bloqueados
+Write-Host "Limpiando reglas temporales del AppGW..."
+az network application-gateway rule delete --gateway-name $appgw --resource-group $rg --name rule1 | Out-Null
+az network application-gateway http-listener delete --gateway-name $appgw --resource-group $rg --name appGatewayHttpListener | Out-Null
+az network application-gateway frontend-port delete --gateway-name $appgw --resource-group $rg --name appGatewayFrontendPort | Out-Null
 
-# Crear frontend address pool apuntando al frontend privado (si no existe)
-Write-Host "Creando Frontend address pool ($frontendPoolNameExplicit) apuntando a $frontendPrivateIp..."
-$existsFrontendPool = az network application-gateway address-pool show --gateway-name $appgw --resource-group $rg --name $frontendPoolNameExplicit -o json 2>$null
-if (-not $existsFrontendPool) {
-    az network application-gateway address-pool create `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name $frontendPoolNameExplicit `
-      --addresses $frontendPrivateIp | Out-Null
-} else {
-    # Si ya existe, actualizar direcciones (sobrescribir)
-    az network application-gateway address-pool update `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name $frontendPoolNameExplicit `
-      --add backendAddresses "{""ipAddress"":""$frontendPrivateIp""}" | Out-Null
-}
-
-# Crear http-settings para frontend
-$frontendHttpSettings = "FrontendHttpSettings"
-$existsFrontendHttpSettings = az network application-gateway http-settings show --gateway-name $appgw --resource-group $rg --name $frontendHttpSettings -o json 2>$null
-if (-not $existsFrontendHttpSettings) {
-    Write-Host "Creando Frontend Http Settings ($frontendHttpSettings)..."
-    az network application-gateway http-settings create `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name $frontendHttpSettings `
-      --port $frontendPort `
-      --protocol Http `
-      --cookie-based-affinity Disabled | Out-Null
-}
-
-# Crear BackendPool apuntando a backendPrivateIp (si no existe)
-Write-Host "Verificando/creando BackendPool..."
-$existsBackendPool = az network application-gateway address-pool show --gateway-name $appgw --resource-group $rg --name BackendPool -o json 2>$null
-if (-not $existsBackendPool) {
-    az network application-gateway address-pool create `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name BackendPool `
-      --addresses $backendPrivateIp | Out-Null
-} else {
-    az network application-gateway address-pool update `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name BackendPool `
-      --add backendAddresses "{""ipAddress"":""$backendPrivateIp""}" | Out-Null
-}
-
-# Crear BackendHttpSettings (si no existe)
-$existsBackendSettings = az network application-gateway http-settings show --gateway-name $appgw --resource-group $rg --name BackendHttpSettings -o json 2>$null
-if (-not $existsBackendSettings) {
-    Write-Host "Creando Backend Http Settings..."
-    az network application-gateway http-settings create `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name BackendHttpSettings `
-      --port $backendPort `
-      --protocol Http `
-      --cookie-based-affinity Disabled | Out-Null
-}
-
-# Crear UrlPathMap con default -> frontendPoolExplicit
-Write-Host "Creando UrlPathMap ($pathMapName) con default -> $frontendPoolNameExplicit..."
-$existsPathMap = az network application-gateway url-path-map show --gateway-name $appgw --resource-group $rg --name $pathMapName -o json 2>$null
-if (-not $existsPathMap) {
-    az network application-gateway url-path-map create `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name $pathMapName `
-      --default-address-pool $frontendPoolNameExplicit `
-      --default-http-settings $frontendHttpSettings | Out-Null
-} else {
-    Write-Host "UrlPathMap $pathMapName ya existe."
-}
-
-# Añadir regla path-based para /datos/* apuntando a BackendPool y BackendHttpSettings
-Write-Host "Creando regla path-based '$datosRuleName' para /datos/* -> BackendPool..."
-$existsDatosRule = az network application-gateway url-path-map rule show --gateway-name $appgw --resource-group $rg --path-map-name $pathMapName --name $datosRuleName -o json 2>$null
-if (-not $existsDatosRule) {
-    az network application-gateway url-path-map rule create `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name $datosRuleName `
-      --path-map-name $pathMapName `
-      --paths /datos/* `
-      --address-pool BackendPool `
-      --http-settings BackendHttpSettings | Out-Null
-} else {
-    Write-Host "UrlPathMap rule $datosRuleName ya existe."
-}
-
-# Finalmente crear la Request Routing Rule PathBased con PRIORITY explícita
-Write-Host "Creando Request Routing Rule ($requestRoutingRuleName) asociada al listener $frontendListenerName con prioridad $priorityValue..."
-$existsRequestRule = az network application-gateway rule show --gateway-name $appgw --resource-group $rg --name $requestRoutingRuleName -o json 2>$null
-if (-not $existsRequestRule) {
-    az network application-gateway rule create `
-      --gateway-name $appgw `
-      --resource-group $rg `
-      --name $requestRoutingRuleName `
-      --rule-type PathBasedRouting `
-      --http-listener $frontendListenerName `
-      --url-path-map $pathMapName `
-      --priority $priorityValue | Out-Null
-} else {
-    Write-Host "Request routing rule $requestRoutingRuleName ya existe."
-}
-
-Write-Host "Reglas path-based y prioridad configuradas correctamente. Revisa el AppGW en el portal para confirmar reglas y estado."
-
-Write-Host "`nDeploy finalizado (o en proceso). Frontend público en: http://${publicIp}:${frontendPort} (cuando AppGW esté listo)."
-Write-Host "El endpoint /datos será en: http://${publicIp}:${frontendPort}/datos (redirigido al backend privado)."
+Write-Host "`n✅ ¡Infraestructura Desplegada Exitosamente!"
+Write-Host "🖥️  Acceso al Dashboard: http://${publicIp}:${publicFrontendPort}"
+Write-Host "📡  Endpoint para Microcontroladores: http://${publicIp}:${publicFrontendPort}/datos"

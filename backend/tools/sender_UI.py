@@ -4,7 +4,8 @@ import argparse
 import requests
 import json
 
-BASE = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+# Actualizado con la IP Pública de tu Application Gateway en Azure
+BASE = os.getenv("BACKEND_URL", "http://20.29.102.93").rstrip("/")
 
 def send(temperatura, humedad, accel_x, accel_y, accel_z):
     payload = {
@@ -59,7 +60,7 @@ def main():
     parser.add_argument("--accel-y", type=float, help="accel_y m/s²")
     parser.add_argument("--accel-z", type=float, help="accel_z m/s²")
     parser.add_argument("--single", action="store_true", help="Enviar una sola vez y salir (sin modo interactivo)")
-    parser.add_argument("--backend", type=str, help="URL del backend, por ejemplo http://localhost:8000")
+    parser.add_argument("--backend", type=str, help="URL del backend, por ejemplo http://20.29.102.93")
     args = parser.parse_args()
 
     global BASE
