@@ -3,7 +3,10 @@
 import { useEffect, useState } from "react";
 import type { AlertaSalida } from "../types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// In production the App Gateway proxies /alertas/ to the backend, so relative
+// paths work out of the box. Override with NEXT_PUBLIC_API_URL for local dev
+// (e.g. http://localhost:8000).
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export function useAlertas() {
   const [alertas, setAlertas] = useState<AlertaSalida[]>([]);
@@ -14,7 +17,7 @@ export function useAlertas() {
 
     const fetchAlertas = async () => {
       try {
-        const res = await fetch(`${API_BASE}/alertas?limit=20`);
+        const res = await fetch(`${API_BASE}/alertas/?limit=20`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: AlertaSalida[] = await res.json();
         if (!cancelled) {

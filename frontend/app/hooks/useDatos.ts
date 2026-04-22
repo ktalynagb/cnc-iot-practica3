@@ -3,7 +3,10 @@
 import { useEffect, useState } from "react";
 import type { LecturaSalida } from "../types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// In production the App Gateway proxies /datos/ to the backend, so relative
+// paths work out of the box. Override with NEXT_PUBLIC_API_URL for local dev
+// (e.g. http://localhost:8000).
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const MAX_CHART_READINGS = 60; // keep the last 60 readings for the chart
 
 export function useDatos() {
@@ -16,7 +19,7 @@ export function useDatos() {
 
     const fetchData = async () => {
       try {
-        const res = await fetch(`${API_BASE}/datos?limit=${MAX_CHART_READINGS}`);
+        const res = await fetch(`${API_BASE}/datos/?limit=${MAX_CHART_READINGS}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: LecturaSalida[] = await res.json();
         if (cancelled) return;

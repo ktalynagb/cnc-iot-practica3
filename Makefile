@@ -15,7 +15,8 @@ NPM          := npm
         run test \
         clean \
         frontend-install frontend-dev frontend-test \
-        docker-up docker-down docker-logs
+        docker-up docker-down docker-logs \
+        deploy down
 
 # ------------------------------------------------------------
 # AYUDA
@@ -40,6 +41,9 @@ help:
 	@Write-Host "    make docker-up       - Construye e inicia todos los servicios"
 	@Write-Host "    make docker-down     - Detiene y elimina contenedores"
 	@Write-Host "    make docker-logs     - Muestra logs en tiempo real"
+	@Write-Host "  AZURE DEPLOY (PowerShell)"
+	@Write-Host "    make deploy          - Crea / actualiza toda la infra en Azure"
+	@Write-Host "    make down            - Borra el resource group y todos sus recursos"
 	@Write-Host ""
 
 # ------------------------------------------------------------
@@ -104,3 +108,14 @@ docker-down:
 
 docker-logs:
 	docker compose logs -f
+
+# ------------------------------------------------------------
+# AZURE DEPLOY (PowerShell)
+# ------------------------------------------------------------
+deploy:
+	@Write-Host "Ejecutando deploy completo en Azure..."
+	powershell -NoProfile -ExecutionPolicy Bypass -File "Deploy\deploy.ps1"
+
+down:
+	@Write-Host "Eliminando recursos de Azure..."
+	powershell -NoProfile -ExecutionPolicy Bypass -File "Deploy\down.ps1"
