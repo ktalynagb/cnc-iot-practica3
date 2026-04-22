@@ -5,7 +5,7 @@ import requests
 import json
 
 # Actualizado con la IP Pública de tu Application Gateway en Azure
-BASE = os.getenv("BACKEND_URL", "http://20.29.102.93").rstrip("/")
+BASE = os.getenv("BACKEND_URL", "http://20.12.182.114").rstrip("/")
 
 def send(temperatura, humedad, accel_x, accel_y, accel_z):
     payload = {

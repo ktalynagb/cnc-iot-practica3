@@ -127,10 +127,10 @@ az network application-gateway http-settings create --gateway-name $appgw --reso
 
 az network application-gateway http-listener create --gateway-name $appgw --resource-group $rg --name AppGwFrontListener --frontend-port PortPublico --frontend-ip appGatewayFrontendIP | Out-Null
 
-# AQUÍ ESTÁ LA MAGIA: Incluimos ambas rutas separadas por espacio
 az network application-gateway url-path-map create --gateway-name $appgw --resource-group $rg --name UrlPathMap --rule-name DatosRule --paths "/datos" "/datos/*" --address-pool BackendPool --http-settings BackendHttpSettings --default-address-pool FrontendPoolExplicit --default-http-settings FrontendHttpSettings | Out-Null
 
-az network application-gateway rule create --gateway-name $appgw --resource-group $rg --name RequestRule-PathBased --rule-type PathBasedRouting --http-listener AppGwFrontListener --url-path-map UrlPathMap --priority 100 | Out-Null
+# CORRECCIÓN AQUÍ: Se agregan --address-pool y --http-settings obligatorios para la regla principal
+az network application-gateway rule create --gateway-name $appgw --resource-group $rg --name RequestRule-PathBased --rule-type PathBasedRouting --http-listener AppGwFrontListener --url-path-map UrlPathMap --address-pool FrontendPoolExplicit --http-settings FrontendHttpSettings --priority 100 | Out-Null
 
 # 6. Limpieza de Puertos Bloqueados
 Write-Host "Limpiando reglas temporales del AppGW..."
