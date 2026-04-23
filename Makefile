@@ -159,8 +159,18 @@ release: push-frontend push-backend
 # ------------------------------------------------------------
 deploy:
 	@Write-Host "Ejecutando deploy completo en Azure..."
-	powershell -NoProfile -ExecutionPolicy Bypass -File "Deploy\deploy.ps1"
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . 'Deploy\deploy.ps1' }"
 
 down:
 	@Write-Host "Eliminando recursos de Azure..."
-	powershell -NoProfile -ExecutionPolicy Bypass -File "Deploy\down.ps1"
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . 'Deploy\down.ps1' }"
+
+deploy-logs:
+	@Write-Host "Cargando configuracion desde $(DEPLOY_ENV) y consultando logs de Azure..."
+	@Get-Content "$(DEPLOY_ENV)" | Where-Object { $$_ -match '^[^#]' -and $$_ -match '=' } | ForEach-Object { $$k, $$v = $$_ -split '=', 2; [System.Environment]::SetEnvironmentVariable($$k.Trim(), $$v.Trim()) }; 
+	Write-Host "`n--- Backend ($$env:ACI_BACKEND_NAME) ---"; 
+	az container logs --resource-group $$env:RG_NAME --name $$env:ACI_BACKEND_NAME; 
+	Write-Host "`n--- Frontend ($$env:ACI_FRONTEND_NAME) ---"; 
+	az container logs --resource-group $$env:RG_NAME --name $$env:ACI_FRONTEND_NAME; 
+	Write-Host "`n--- Datastore ($$env:ACI_DB_NAME) ---"; 
+	az container logs --resource-group $$env:RG_NAME --name $$env:ACI_DB_NAME
