@@ -148,7 +148,13 @@ push-backend:
 	@$$pass = (Get-Content "$(DEPLOY_ENV)" | Where-Object { $$_ -match '^DOCKER_PASSWORD' } | ForEach-Object { ($$_ -split '=', 2)[1].Trim() }); $$pass | docker login --username $(DOCKER_USERNAME) --password-stdin; docker push $(BACKEND_IMAGE)
 	@Write-Host "Backend publicado."
 
-release: push-frontend push-backend
+release: 
+	@Write-Host "Publicando imagen del frontend en Docker Hub..."
+	@$$pass = (Get-Content "$(DEPLOY_ENV)" | Where-Object { $$_ -match '^DOCKER_PASSWORD' } | ForEach-Object { ($$_ -split '=', 2)[1].Trim() }); $$pass | docker login --username $(DOCKER_USERNAME) --password-stdin; docker push $(FRONTEND_IMAGE)
+	@Write-Host "Frontend publicado."
+	@Write-Host "Publicando imagen del backend en Docker Hub..."
+	@$$pass = (Get-Content "$(DEPLOY_ENV)" | Where-Object { $$_ -match '^DOCKER_PASSWORD' } | ForEach-Object { ($$_ -split '=', 2)[1].Trim() }); $$pass | docker login --username $(DOCKER_USERNAME) --password-stdin; docker push $(BACKEND_IMAGE)
+	@Write-Host "Backend publicado."
 	@Write-Host ""
 	@Write-Host "Release completo — ambas imágenes publicadas en Docker Hub."
 	@Write-Host "Ahora puedes ejecutar: make deploy" 

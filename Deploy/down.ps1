@@ -17,7 +17,7 @@ function Load-EnvFile($path) {
             if ($parts.Count -eq 2) {
                 $k = $parts[0].Trim()
                 $v = $parts[1].Trim()
-                Set-Item -Path "env:$k" -Value $
+                Set-Item -Path "env:$k" -Value $v
             }
         }
     } else {
