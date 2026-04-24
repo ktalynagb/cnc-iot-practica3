@@ -102,7 +102,7 @@ class CNCSimulator(ctk.CTk):
                 "humedad": round(random.uniform(40.0, 70.0), 2),
                 "accel_x": round(random.uniform(-2.0, 2.0), 4),
                 "accel_y": round(random.uniform(-2.0, 2.0), 4),
-                "accel_z": round(random.uniform(8.0, 11.0), 4) # Gravedad +- vibración
+                "accel_z": round(random.uniform(-2.0, 2.0), 4) # Gravedad +- vibración
             }
 
     def send_data(self):
