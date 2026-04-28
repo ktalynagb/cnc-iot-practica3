@@ -172,11 +172,4 @@ down:
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "& { . 'Deploy\down.ps1' }"
 
 deploy-logs:
-	@Write-Host "Cargando configuracion desde $(DEPLOY_ENV) y consultando logs de Azure..."
-	@Get-Content "$(DEPLOY_ENV)" | Where-Object { $$_ -match '^[^#]' -and $$_ -match '=' } | ForEach-Object { $$k, $$v = $$_ -split '=', 2; [System.Environment]::SetEnvironmentVariable($$k.Trim(), $$v.Trim()) }; 
-	Write-Host "`n--- Backend ($$env:ACI_BACKEND_NAME) ---"; 
-	az container logs --resource-group $$env:RG_NAME --name $$env:ACI_BACKEND_NAME; 
-	Write-Host "`n--- Frontend ($$env:ACI_FRONTEND_NAME) ---"; 
-	az container logs --resource-group $$env:RG_NAME --name $$env:ACI_FRONTEND_NAME; 
-	Write-Host "`n--- Datastore ($$env:ACI_DB_NAME) ---"; 
-	az container logs --resource-group $$env:RG_NAME --name $$env:ACI_DB_NAME
+	@Write-Host "Cargando configuracion desde $(DEPLOY_ENV) y consultando logs de Azure..."; Get-Content "$(DEPLOY_ENV)" | Where-Object { $$_ -match '^[^#]' -and $$_ -match '=' } | ForEach-Object { $$k, $$v = $$_ -split '=', 2; Set-Item -Path ('Env:' + $$k.Trim()) -Value $$v.Trim() }; Write-Host "`n--- Backend ($$env:ACI_BACKEND_NAME) ---"; az container logs --resource-group $$env:RG_NAME --name $$env:ACI_BACKEND_NAME; Write-Host "`n--- Frontend ($$env:ACI_FRONTEND_NAME) ---"; az container logs --resource-group $$env:RG_NAME --name $$env:ACI_FRONTEND_NAME; Write-Host "`n--- Datastore ($$env:ACI_DB_NAME) ---"; az container logs --resource-group $$env:RG_NAME --name $$env:ACI_DB_NAME
