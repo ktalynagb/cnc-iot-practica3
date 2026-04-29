@@ -1,0 +1,29 @@
+# mqtt_bridge.service  —  Servicio systemd para el MQTT Bridge
+# ================================================================
+# Instalación en la VM de AWS:
+#   sudo cp bridge/mqtt_bridge.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable mqtt_bridge
+#   sudo systemctl start mqtt_bridge
+#
+# Ver logs:
+#   sudo journalctl -u mqtt_bridge -f
+
+[Unit]
+Description=FLUX CNC — MQTT Bridge (MQTT → InfluxDB + CSV)
+After=network.target mosquitto.service
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/cnc-iot-backend
+EnvironmentFile=/home/ubuntu/cnc-iot-backend/backend/.env
+ExecStart=/usr/bin/python3 bridge/mqtt_bridge.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
