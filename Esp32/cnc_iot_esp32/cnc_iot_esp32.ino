@@ -1,43 +1,39 @@
-// =============================================================
-<<<<<<< HEAD
-//  CNC IoT - ESP32
-//  Sensores : DHT11 (temperatura y humedad)
-//             MPU-6050 (aceleración X/Y/Z por I2C)
-//  Destino  : POST http://20.12.182.114/datos/
-=======
-//  CNC IoT - ESP32-C3 Super Mini
-//  Sensores : DHT11 (temperatura y humedad)  — GPIO4
-//             MPU-6050 (aceleración X/Y/Z)   — SDA=8, SCL=9
-//  Nota     : GPIO21 dañado — no usar
->>>>>>> 01aaa633170e123099bff09545a640188c2812ef
-// =============================================================
+
+//  CNC IoT - ESP32  |  Entrega 2 — MQTT
+//  Sensores : DHT11/22 (temperatura y humedad)  — GPIO4
+//             MPU-6050 (aceleración X/Y/Z)      — SDA=8, SCL=9
+//  Destino  : Broker Mosquitto en AWS vía MQTT
+
 
 #include "credentials.h"
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include <PubSubClient.h>   // Instalar librería: "PubSubClient" de Nick O'Leary
 #include <DHT.h>
 #include <Wire.h>
 
-<<<<<<< HEAD
-//  DHT11 
-#define DHTPIN  4          // GPIO4 : pin DATA del DHT11
-=======
-// DHT11
-#define DHTPIN  0
->>>>>>> 01aaa633170e123099bff09545a640188c2812ef
-#define DHTTYPE DHT22
+//  DHT 
+#define DHTPIN   4
+#define DHTTYPE  DHT22
 DHT dht(DHTPIN, DHTTYPE);
 
-// MPU-6050
-#define MPU_ADDR 0x68
-#define SDA_PIN  8
-#define SCL_PIN  9
+//  MPU-6050 
+#define MPU_ADDR  0x68
+#define SDA_PIN   8
+#define SCL_PIN   9
 
+//  MQTT
+#define MQTT_PORT  1883
+
+WiFiClient   wifiClient;
+PubSubClient mqtt(wifiClient);
+
+//  Intervalo
 const unsigned long INTERVALO_MS = 2000;
 unsigned long ultimoEnvio = 0;
-bool mpuOk = true;  // se define una sola vez en setup
+bool mpuOk = true;
 
-// ── Helpers MPU ──────────────────────────────────────────────
+
+// Helpers MPU (lectura directa por I2C, sin librería externa)
 
 void mpuEscribir(byte reg, byte valor) {
   Wire.beginTransmission(MPU_ADDR);
@@ -54,24 +50,10 @@ int16_t mpuLeerInt16(byte reg) {
   return (Wire.read() << 8) | Wire.read();
 }
 
-// ── Setup ────────────────────────────────────────────────────
 
-void setup() {
-  Serial.begin(115200);
-  delay(500);
-  Serial.println("\n=== CNC IoT - ESP32-C3 Super Mini iniciando ===");
+// Conexión WiFi
 
-  // DHT11
-  dht.begin();
-  Serial.println("[DHT22] Iniciado en GPIO4");
-
-  // MPU-6050 — verificar solo una vez en setup
-  Wire.begin(SDA_PIN, SCL_PIN);
-  delay(100);
-  mpuEscribir(0x6B, 0x00);  // despertar del modo sleep
-  delay(100);
-
-  // WiFi
+void conectarWiFi() {
   Serial.printf("[WiFi] Conectando a %s ", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
@@ -81,32 +63,88 @@ void setup() {
   Serial.printf("\n[WiFi] Conectado. IP: %s\n", WiFi.localIP().toString().c_str());
 }
 
-// ── Loop ─────────────────────────────────────────────────────
+
+// Conexión MQTT (con reintentos)
+
+void conectarMQTT() {
+  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+
+  while (!mqtt.connected()) {
+    Serial.printf("[MQTT] Conectando a %s...", MQTT_BROKER);
+    // client_id único basado en MAC para evitar colisiones
+    String clientId = "ESP32-CNC-" + WiFi.macAddress();
+
+    if (mqtt.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD)) {
+      Serial.println(" OK");
+    } else {
+      Serial.printf(" Error rc=%d — reintentando en 3s\n", mqtt.state());
+      delay(3000);
+    }
+  }
+}
+
+
+// Setup
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("\n=== CNC IoT ESP32 — Entrega 2 MQTT ===");
+
+  // DHT
+  dht.begin();
+  Serial.println("[DHT22] Iniciado en GPIO4");
+
+  // MPU-6050
+  Wire.begin(SDA_PIN, SCL_PIN);
+  delay(100);
+  mpuEscribir(0x6B, 0x00);   // sacar del modo sleep
+  delay(100);
+  Serial.println("[MPU-6050] Iniciado en SDA=8 SCL=9");
+
+  // WiFi
+  conectarWiFi();
+
+  // MQTT
+  conectarMQTT();
+}
+
+
+// Loop
 
 void loop() {
+  // Mantener conexión MQTT viva
+  if (!mqtt.connected()) {
+    Serial.println("[MQTT] Desconectado - reconectando...");
+    conectarMQTT();
+  }
+  mqtt.loop();
+
+  // Respetar intervalo de envío
   unsigned long ahora = millis();
   if (ahora - ultimoEnvio < INTERVALO_MS) return;
   ultimoEnvio = ahora;
 
-  // Leer DHT11
+  //  Leer DHT22
   float humedad     = dht.readHumidity();
   float temperatura = dht.readTemperature();
 
   if (isnan(humedad) || isnan(temperatura)) {
-    Serial.println("[DHT11] Error de lectura - se omite este ciclo");
+    Serial.println("[DHT22] Error de lectura - se omite este ciclo");
     return;
   }
 
-  // Leer MPU-6050 directo, sin verificar conexión en cada ciclo
+  //Leer MPU-6050
   float accel_x = 0.0, accel_y = 0.0, accel_z = 0.0;
-
   if (mpuOk) {
     accel_x = (mpuLeerInt16(0x3B) / 16384.0) * 9.81;
     accel_y = (mpuLeerInt16(0x3D) / 16384.0) * 9.81;
     accel_z = (mpuLeerInt16(0x3F) / 16384.0) * 9.81;
+  } else {
+    Serial.println("[MPU-6050] No detectado - enviando ceros");
   }
 
-  // Monitor serial
+  //Monitor serial
   Serial.println("------ Nueva lectura ------");
   Serial.printf("  Temperatura : %.2f °C\n",   temperatura);
   Serial.printf("  Humedad     : %.2f %%\n",   humedad);
@@ -114,35 +152,26 @@ void loop() {
   Serial.printf("  Accel Y     : %.4f m/s²\n", accel_y);
   Serial.printf("  Accel Z     : %.4f m/s²\n", accel_z);
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Sin conexión - se omite el envío");
-    return;
-  }
+  //Construir y publicar los 3 topics
+  char payload[120];
 
-  // Construir JSON
-  char jsonBody[200];
-  snprintf(jsonBody, sizeof(jsonBody),
-    "{\"temperatura\":%.2f,\"humedad\":%.2f,"
-    "\"accel_x\":%.4f,\"accel_y\":%.4f,\"accel_z\":%.4f}",
-    temperatura, humedad, accel_x, accel_y, accel_z
-  );
+  //  Temperatura
+  snprintf(payload, sizeof(payload), "{\"value\":%.2f}", temperatura);
+  bool okTemp = mqtt.publish("flux/cnc1/temperatura", payload, true);
+  Serial.printf("[MQTT] flux/cnc1/temperatura  → %s  %s\n",
+                payload, okTemp ? "OK" : " ERROR");
 
-  // HTTP POST
-  HTTPClient http;
-  http.begin(SERVER_URL);
-  http.addHeader("Content-Type", "application/json");
+  //  Humedad
+  snprintf(payload, sizeof(payload), "{\"value\":%.2f}", humedad);
+  bool okHum = mqtt.publish("flux/cnc1/humedad", payload, true);
+  Serial.printf("[MQTT] flux/cnc1/humedad      → %s  %s\n",
+                payload, okHum ? "OK" : " ERROR");
 
-  int httpCode = http.POST(jsonBody);
-
-  if (httpCode > 0) {
-    Serial.printf("[HTTP] Respuesta: %d\n", httpCode);
-    if (httpCode == 200 || httpCode == 201) {
-      String respuesta = http.getString();
-      Serial.printf("[HTTP] Body: %s\n", respuesta.c_str());
-    }
-  } else {
-    Serial.printf("[HTTP] Error: %s\n", http.errorToString(httpCode).c_str());
-  }
-
-  http.end();
+  //  Vibración
+  snprintf(payload, sizeof(payload),
+    "{\"accel_x\":%.4f,\"accel_y\":%.4f,\"accel_z\":%.4f}",
+    accel_x, accel_y, accel_z);
+  bool okVib = mqtt.publish("flux/cnc1/vibracion", payload, true);
+  Serial.printf("[MQTT] flux/cnc1/vibracion    → %s  %s\n",
+                payload, okVib ? "OK" : " ERROR");
 }
