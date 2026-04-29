@@ -1,8 +1,15 @@
 // =============================================================
+<<<<<<< HEAD
+//  CNC IoT - ESP32
+//  Sensores : DHT11 (temperatura y humedad)
+//             MPU-6050 (aceleración X/Y/Z por I2C)
+//  Destino  : POST http://20.12.182.114/datos/
+=======
 //  CNC IoT - ESP32-C3 Super Mini
 //  Sensores : DHT11 (temperatura y humedad)  — GPIO4
 //             MPU-6050 (aceleración X/Y/Z)   — SDA=8, SCL=9
 //  Nota     : GPIO21 dañado — no usar
+>>>>>>> 01aaa633170e123099bff09545a640188c2812ef
 // =============================================================
 
 #include "credentials.h"
@@ -11,8 +18,13 @@
 #include <DHT.h>
 #include <Wire.h>
 
+<<<<<<< HEAD
+//  DHT11 
+#define DHTPIN  4          // GPIO4 : pin DATA del DHT11
+=======
 // DHT11
 #define DHTPIN  0
+>>>>>>> 01aaa633170e123099bff09545a640188c2812ef
 #define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
 
@@ -51,7 +63,7 @@ void setup() {
 
   // DHT11
   dht.begin();
-  Serial.println("[DHT11] Iniciado en GPIO4");
+  Serial.println("[DHT22] Iniciado en GPIO4");
 
   // MPU-6050 — verificar solo una vez en setup
   Wire.begin(SDA_PIN, SCL_PIN);
