@@ -199,49 +199,13 @@ az network vnet subnet update `
 Write-Host "  -> NSG privado asociado." -ForegroundColor Green
 
 # =====================================================================
-# --- FASE 4: Maquinas Virtuales e Instalacion de Docker ---
+# --- FASE 4: Creacion de VMs (limpias, sin cloud-init) ---
 # =====================================================================
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " FASE 4: Maquinas Virtuales e Instalacion de Docker" -ForegroundColor Cyan
+Write-Host " FASE 4: Creacion de VMs (sin cloud-init)" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
-
-# -----------------------------------------------------------------------
-# FIX DEFINITIVO: Escribimos el cloud-init en un archivo temporal usando
-# [System.IO.File]::WriteAllBytes() para garantizar UTF-8 SIN BOM y LF.
-# Luego Azure CLI lee el archivo directamente con la sintaxis "@ruta".
-# Esto evita el truncamiento de strings largos de PowerShell -> az CLI.
-# -----------------------------------------------------------------------
-
-Write-Host "Generando archivo cloud-init temporal (UTF-8 sin BOM, LF)..." -ForegroundColor Yellow
-
-$cloudInitRaw = @"
-#cloud-config
-package_update: true
-package_upgrade: true
-packages:
-  - docker.io
-  - docker-compose
-runcmd:
-  - systemctl enable docker
-  - systemctl start docker
-  - usermod -aG docker ubuntu
-"@
-
-# 1. Normalizar CRLF -> LF
-$cloudInitLF = $cloudInitRaw -replace "`r`n", "`n"
-
-# 2. Convertir a bytes UTF-8 SIN BOM
-$utf8NoBom    = New-Object System.Text.UTF8Encoding($false)
-$cloudInitBytes = $utf8NoBom.GetBytes($cloudInitLF)
-
-# 3. Escribir bytes exactos a archivo temporal (sin BOM, sin CRLF)
-$tempCloudInit = "$env:TEMP\cloud-init-iot.txt"
-[System.IO.File]::WriteAllBytes($tempCloudInit, $cloudInitBytes)
-
-Write-Host "  -> Archivo temporal creado en: $tempCloudInit" -ForegroundColor Green
-Write-Host "  -> Tamano del archivo: $((Get-Item $tempCloudInit).Length) bytes" -ForegroundColor Green
 
 # --- VM Publica ---
 Write-Host "Desplegando VM publica '$VM_PUBLIC_NAME' en subred '$PUBLIC_SUBNET_NAME'..." -ForegroundColor Yellow
@@ -257,68 +221,137 @@ az vm create `
     --nsg                        $NSG_PUBLIC_NAME `
     --public-ip-sku              Standard `
     --public-ip-address-dns-name $DNS_LABEL `
-    --custom-data                "@$tempCloudInit" `
     --output                     none
-Write-Host "  -> VM publica '$VM_PUBLIC_NAME' desplegada." -ForegroundColor Green
+Write-Host "  -> VM publica '$VM_PUBLIC_NAME' creada (limpia, sin cloud-init)." -ForegroundColor Green
 
-# --- VM Privada ---
+# --- VM Privada (sin IP publica) ---
 Write-Host "Desplegando VM privada '$VM_PRIVATE_NAME' en subred '$PRIVATE_SUBNET_NAME' (sin IP publica)..." -ForegroundColor Yellow
 az vm create `
-    --resource-group  $RG_NAME `
-    --name            $VM_PRIVATE_NAME `
-    --image           $VM_IMAGE `
-    --size            $VM_SIZE `
-    --admin-username  $ADMIN_USER `
+    --resource-group    $RG_NAME `
+    --name              $VM_PRIVATE_NAME `
+    --image             $VM_IMAGE `
+    --size              $VM_SIZE `
+    --admin-username    $ADMIN_USER `
     --generate-ssh-keys `
-    --vnet-name       $VNET_NAME `
-    --subnet          $PRIVATE_SUBNET_NAME `
-    --nsg             $NSG_PRIVATE_NAME `
+    --vnet-name         $VNET_NAME `
+    --subnet            $PRIVATE_SUBNET_NAME `
+    --nsg               $NSG_PRIVATE_NAME `
     --public-ip-address '""' `
-    --custom-data     "@$tempCloudInit" `
-    --output          none
-Write-Host "  -> VM privada '$VM_PRIVATE_NAME' desplegada (sin IP publica)." -ForegroundColor Green
+    --output            none
+Write-Host "  -> VM privada '$VM_PRIVATE_NAME' creada (sin IP publica)." -ForegroundColor Green
 
-# Limpieza del archivo temporal
-Remove-Item $tempCloudInit -Force
-Write-Host "  -> Archivo temporal eliminado." -ForegroundColor Gray
+# =====================================================================
+# --- Obtener IPs para el provisioning cruzado ---
+# =====================================================================
+
+Write-Host ""
+Write-Host "Obteniendo IPs de las VMs para provisioning cruzado..." -ForegroundColor Yellow
+
+$VM_PUBLIC_IP = (az vm show `
+    --resource-group $RG_NAME `
+    --name           $VM_PUBLIC_NAME `
+    --show-details `
+    --query          "publicIps" `
+    --output         tsv).Trim()
+
+$VM_FRONT_PRIVATE_IP = (az vm show `
+    --resource-group $RG_NAME `
+    --name           $VM_PUBLIC_NAME `
+    --show-details `
+    --query          "privateIps" `
+    --output         tsv).Trim()
+
+$VM_BACK_PRIVATE_IP = (az vm show `
+    --resource-group $RG_NAME `
+    --name           $VM_PRIVATE_NAME `
+    --show-details `
+    --query          "privateIps" `
+    --output         tsv).Trim()
+
+Write-Host "  -> IP publica  de $VM_PUBLIC_NAME  : $VM_PUBLIC_IP" -ForegroundColor Green
+Write-Host "  -> IP privada  de $VM_PUBLIC_NAME  : $VM_FRONT_PRIVATE_IP" -ForegroundColor Green
+Write-Host "  -> IP privada  de $VM_PRIVATE_NAME : $VM_BACK_PRIVATE_IP" -ForegroundColor Green
+
+# =====================================================================
+# --- FASE 4b: Aprovisionamiento via az vm run-command invoke ---
+# Evita cloud-init y SSH; el agente de Azure ejecuta los scripts bash
+# directamente dentro de cada VM con privilegios de root.
+# =====================================================================
+
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host " FASE 4b: Aprovisionamiento via az vm run-command invoke" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+
+# --- Aprovisionar VM Publica: Mosquitto (INF-2) + Grafana (INF-5) ---
+Write-Host ""
+Write-Host "Aprovisionando '$VM_PUBLIC_NAME' (Mosquitto + Grafana)..." -ForegroundColor Yellow
+Write-Host "  Script    : provision-front.sh" -ForegroundColor Gray
+Write-Host "  Parametros: VM_BACK_IP=$VM_BACK_PRIVATE_IP" -ForegroundColor Gray
+
+$frontResult = az vm run-command invoke `
+    --resource-group $RG_NAME `
+    --name           $VM_PUBLIC_NAME `
+    --command-id     RunShellScript `
+    --scripts        "@$SCRIPTS_DIR\provision-front.sh" `
+    --parameters     $VM_BACK_PRIVATE_IP $INFLUX_TOKEN `
+    --output         json | ConvertFrom-Json
+
+foreach ($item in $frontResult.value) {
+    if ($item.message) { Write-Host $item.message }
+}
+Write-Host "  -> Aprovisionamiento de '$VM_PUBLIC_NAME' completado." -ForegroundColor Green
+
+# --- Aprovisionar VM Privada: InfluxDB (INF-3/INF-4) + Telegraf (Bridge) ---
+Write-Host ""
+Write-Host "Aprovisionando '$VM_PRIVATE_NAME' (InfluxDB + Telegraf)..." -ForegroundColor Yellow
+Write-Host "  Script    : provision-back.sh" -ForegroundColor Gray
+Write-Host "  Parametros: VM_FRONT_IP=$VM_FRONT_PRIVATE_IP" -ForegroundColor Gray
+
+$backResult = az vm run-command invoke `
+    --resource-group $RG_NAME `
+    --name           $VM_PRIVATE_NAME `
+    --command-id     RunShellScript `
+    --scripts        "@$SCRIPTS_DIR\provision-back.sh" `
+    --parameters     $VM_FRONT_PRIVATE_IP `
+    --output         json | ConvertFrom-Json
+
+foreach ($item in $backResult.value) {
+    if ($item.message) { Write-Host $item.message }
+}
+Write-Host "  -> Aprovisionamiento de '$VM_PRIVATE_NAME' completado." -ForegroundColor Green
 
 # =====================================================================
 # --- FASE 5: Resumen de Conectividad ---
 # =====================================================================
 
 Write-Host ""
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " FASE 5: Resumen de Conectividad" -ForegroundColor Cyan
-Write-Host "============================================================" -ForegroundColor Cyan
-
-Write-Host "Obteniendo IP publica de '$VM_PUBLIC_NAME'..." -ForegroundColor Yellow
-$VM_PUBLIC_IP = az vm show `
-    --resource-group   $RG_NAME `
-    --name             $VM_PUBLIC_NAME `
-    --show-details `
-    --query            "publicIps" `
-    --output           tsv
-
-Write-Host "Obteniendo IP privada de '$VM_PRIVATE_NAME'..." -ForegroundColor Yellow
-$VM_PRIVATE_IP = az vm show `
-    --resource-group   $RG_NAME `
-    --name             $VM_PRIVATE_NAME `
-    --show-details `
-    --query            "privateIps" `
-    --output           tsv
-
-Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host " DESPLIEGUE FINALIZADO EXITOSAMENTE" -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "  VM Publica  ($VM_PUBLIC_NAME):" -ForegroundColor Green
-Write-Host "    IP Publica : $VM_PUBLIC_IP" -ForegroundColor Green
-Write-Host "    DNS        : $DNS_LABEL.$LOCATION.cloudapp.azure.com" -ForegroundColor Green
-Write-Host "    SSH        : ssh $ADMIN_USER@$VM_PUBLIC_IP" -ForegroundColor Green
-Write-Host "    MQTT       : $VM_PUBLIC_IP:1883" -ForegroundColor Green
-Write-Host "    Grafana    : http://$VM_PUBLIC_IP:3000" -ForegroundColor Green
+Write-Host "    IP Publica  : $VM_PUBLIC_IP" -ForegroundColor Green
+Write-Host "    IP Privada  : $VM_FRONT_PRIVATE_IP" -ForegroundColor Green
+Write-Host "    DNS         : $DNS_LABEL.$LOCATION.cloudapp.azure.com" -ForegroundColor Green
+Write-Host "    SSH         : ssh $ADMIN_USER@$VM_PUBLIC_IP" -ForegroundColor Green
+Write-Host "    MQTT        : $VM_PUBLIC_IP:1883  (flux_user / flux_pass)" -ForegroundColor Green
+Write-Host "    Grafana     : http://$VM_PUBLIC_IP:3000  (admin / admin123)" -ForegroundColor Green
 Write-Host ""
 Write-Host "  VM Privada  ($VM_PRIVATE_NAME):" -ForegroundColor Green
-Write-Host "    IP Privada : $VM_PRIVATE_IP" -ForegroundColor Green
-Write-Host "    InfluxDB   : $VM_PRIVATE_IP:8086 (accesible solo desde $PUBLIC_SUBNET_PREFIX)" -ForegroundColor Green
+Write-Host "    IP Privada  : $VM_BACK_PRIVATE_IP" -ForegroundColor Green
+Write-Host "    InfluxDB    : http://$VM_BACK_PRIVATE_IP:8086  (accesible solo desde $PUBLIC_SUBNET_PREFIX)" -ForegroundColor Green
+Write-Host "    Org/Bucket  : flux / flux_cnc" -ForegroundColor Green
+Write-Host ""
+Write-Host "  [INF-4] Token InfluxDB — compartir con equipo de Backend:" -ForegroundColor Yellow
+Write-Host "    INFLUX_TOKEN  = $INFLUX_TOKEN" -ForegroundColor Yellow
+Write-Host "    INFLUX_URL    = http://$VM_BACK_PRIVATE_IP:8086" -ForegroundColor Yellow
+Write-Host "    INFLUX_ORG    = flux" -ForegroundColor Yellow
+Write-Host "    INFLUX_BUCKET = flux_cnc" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  Flujo de red:" -ForegroundColor Cyan
+Write-Host "    ESP32       --> Mosquitto  ($VM_PUBLIC_IP:1883)" -ForegroundColor Cyan
+Write-Host "    Telegraf    --> Mosquitto  ($VM_FRONT_PRIVATE_IP:1883)  [VNet interna]" -ForegroundColor Cyan
+Write-Host "    Telegraf    --> InfluxDB   (influxdb:8086)              [Docker interno]" -ForegroundColor Cyan
+Write-Host "    Grafana     --> InfluxDB   ($VM_BACK_PRIVATE_IP:8086)  [VNet interna]" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Green
+
