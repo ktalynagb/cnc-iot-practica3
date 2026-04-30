@@ -208,15 +208,14 @@ Write-Host " FASE 4: Maquinas Virtuales e Instalacion de Docker" -ForegroundColo
 Write-Host "============================================================" -ForegroundColor Cyan
 
 # -----------------------------------------------------------------------
-# FIX: Codificamos el cloud-init directamente en memoria (en Base64),
-# usando UTF-8 SIN BOM y normalizando los saltos de linea a LF.
-# Esto evita por completo los problemas de CRLF y BOM de Windows que
-# corrompian la cadena base64 que Azure CLI intentaba generar.
+# FIX DEFINITIVO: Escribimos el cloud-init en un archivo temporal usando
+# [System.IO.File]::WriteAllBytes() para garantizar UTF-8 SIN BOM y LF.
+# Luego Azure CLI lee el archivo directamente con la sintaxis "@ruta".
+# Esto evita el truncamiento de strings largos de PowerShell -> az CLI.
 # -----------------------------------------------------------------------
 
-Write-Host "Generando y codificando cloud-init en Base64 (UTF-8 sin BOM, LF)..." -ForegroundColor Yellow
+Write-Host "Generando archivo cloud-init temporal (UTF-8 sin BOM, LF)..." -ForegroundColor Yellow
 
-# Definimos el contenido con here-string (PowerShell agrega CRLF)
 $cloudInitRaw = @"
 #cloud-config
 package_update: true
@@ -230,52 +229,58 @@ runcmd:
   - usermod -aG docker ubuntu
 "@
 
-# 1. Normalizamos CRLF -> LF para que Linux lo interprete correctamente
+# 1. Normalizar CRLF -> LF
 $cloudInitLF = $cloudInitRaw -replace "`r`n", "`n"
 
-# 2. Convertimos a bytes con UTF-8 SIN BOM
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+# 2. Convertir a bytes UTF-8 SIN BOM
+$utf8NoBom    = New-Object System.Text.UTF8Encoding($false)
 $cloudInitBytes = $utf8NoBom.GetBytes($cloudInitLF)
 
-# 3. Codificamos a Base64
-$cloudInitB64 = [Convert]::ToBase64String($cloudInitBytes)
+# 3. Escribir bytes exactos a archivo temporal (sin BOM, sin CRLF)
+$tempCloudInit = "$env:TEMP\cloud-init-iot.txt"
+[System.IO.File]::WriteAllBytes($tempCloudInit, $cloudInitBytes)
 
-Write-Host "  -> cloud-init codificado correctamente (longitud base64: $($cloudInitB64.Length))." -ForegroundColor Green
+Write-Host "  -> Archivo temporal creado en: $tempCloudInit" -ForegroundColor Green
+Write-Host "  -> Tamano del archivo: $((Get-Item $tempCloudInit).Length) bytes" -ForegroundColor Green
 
 # --- VM Publica ---
 Write-Host "Desplegando VM publica '$VM_PUBLIC_NAME' en subred '$PUBLIC_SUBNET_NAME'..." -ForegroundColor Yellow
 az vm create `
-    --resource-group        $RG_NAME `
-    --name                  $VM_PUBLIC_NAME `
-    --image                 $VM_IMAGE `
-    --size                  $VM_SIZE `
-    --admin-username        $ADMIN_USER `
+    --resource-group             $RG_NAME `
+    --name                       $VM_PUBLIC_NAME `
+    --image                      $VM_IMAGE `
+    --size                       $VM_SIZE `
+    --admin-username             $ADMIN_USER `
     --generate-ssh-keys `
-    --vnet-name             $VNET_NAME `
-    --subnet                $PUBLIC_SUBNET_NAME `
-    --nsg                   $NSG_PUBLIC_NAME `
-    --public-ip-sku         Standard `
+    --vnet-name                  $VNET_NAME `
+    --subnet                     $PUBLIC_SUBNET_NAME `
+    --nsg                        $NSG_PUBLIC_NAME `
+    --public-ip-sku              Standard `
     --public-ip-address-dns-name $DNS_LABEL `
-    --custom-data           $cloudInitB64 `
-    --output                none
+    --custom-data                "@$tempCloudInit" `
+    --output                     none
 Write-Host "  -> VM publica '$VM_PUBLIC_NAME' desplegada." -ForegroundColor Green
 
 # --- VM Privada ---
 Write-Host "Desplegando VM privada '$VM_PRIVATE_NAME' en subred '$PRIVATE_SUBNET_NAME' (sin IP publica)..." -ForegroundColor Yellow
 az vm create `
-    --resource-group        $RG_NAME `
-    --name                  $VM_PRIVATE_NAME `
-    --image                 $VM_IMAGE `
-    --size                  $VM_SIZE `
-    --admin-username        $ADMIN_USER `
+    --resource-group  $RG_NAME `
+    --name            $VM_PRIVATE_NAME `
+    --image           $VM_IMAGE `
+    --size            $VM_SIZE `
+    --admin-username  $ADMIN_USER `
     --generate-ssh-keys `
-    --vnet-name             $VNET_NAME `
-    --subnet                $PRIVATE_SUBNET_NAME `
-    --nsg                   $NSG_PRIVATE_NAME `
-    --public-ip-address     "" `
-    --custom-data           $cloudInitB64 `
-    --output                none
+    --vnet-name       $VNET_NAME `
+    --subnet          $PRIVATE_SUBNET_NAME `
+    --nsg             $NSG_PRIVATE_NAME `
+    --public-ip-address '""' `
+    --custom-data     "@$tempCloudInit" `
+    --output          none
 Write-Host "  -> VM privada '$VM_PRIVATE_NAME' desplegada (sin IP publica)." -ForegroundColor Green
+
+# Limpieza del archivo temporal
+Remove-Item $tempCloudInit -Force
+Write-Host "  -> Archivo temporal eliminado." -ForegroundColor Gray
 
 # =====================================================================
 # --- FASE 5: Resumen de Conectividad ---
