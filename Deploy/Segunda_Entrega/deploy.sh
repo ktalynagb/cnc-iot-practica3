@@ -212,7 +212,7 @@ az vm create \
   --vnet-name "$VNET_NAME" \
   --subnet "$PRIVATE_SUBNET_NAME" \
   --nsg "$NSG_PRIVATE_NAME" \
-  --public-ip-address '""' \
+  --public-ip-address "" \
   --output none
 echo "  -> VM privada '${VM_PRIVATE_NAME}' creada."
 
