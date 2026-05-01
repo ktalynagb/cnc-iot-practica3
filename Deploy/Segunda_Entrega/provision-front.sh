@@ -17,24 +17,24 @@ echo "================================================================"
 
 echo "[1/6] Instalando Docker y Docker Compose..."
 apt-get update -qq
-apt-get install -y --no-install-recommends docker.io docker-compose
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker.io docker-compose
 systemctl enable docker
 systemctl start docker
 
 until docker info > /dev/null 2>&1; do
-    echo "  Esperando que Docker arranque..."
-    sleep 2
+  echo "  Esperando que Docker arranque..."
+  sleep 2
 done
 echo "  -> Docker listo."
 
-echo "[2/6] Creando estructura de directorios en ${WORK_DIR}..."
+echo "[2/6] Preparando estructura de directorios..."
 mkdir -p "${WORK_DIR}/mosquitto/config"
 mkdir -p "${WORK_DIR}/mosquitto/data"
 mkdir -p "${WORK_DIR}/mosquitto/log"
 mkdir -p "${WORK_DIR}/grafana/provisioning/datasources"
 mkdir -p "${WORK_DIR}/grafana/provisioning/dashboards"
 
-echo "[3/6] Configurando Mosquitto con autenticación usuario/contraseña..."
+echo "[3/6] Configurando Mosquitto..."
 cat > "${WORK_DIR}/mosquitto/config/mosquitto.conf" << 'EOF'
 listener 1883
 allow_anonymous false
@@ -45,6 +45,7 @@ log_dest stdout
 log_dest file /mosquitto/log/mosquitto.log
 EOF
 
+rm -f "${WORK_DIR}/mosquitto/config/passwd"
 touch "${WORK_DIR}/mosquitto/config/passwd"
 
 docker run --rm \
@@ -55,7 +56,7 @@ docker run --rm \
 chmod 644 "${WORK_DIR}/mosquitto/config/passwd"
 echo "  -> Credenciales Mosquitto generadas: usuario=${MQTT_USER}"
 
-echo "[4/6] Creando provisioning de datasource de Grafana → InfluxDB @ ${VM_BACK_IP}:8086..."
+echo "[4/6] Configurando Grafana datasource..."
 cat > "${WORK_DIR}/grafana/provisioning/datasources/influxdb.yaml" << EOF
 apiVersion: 1
 
@@ -85,8 +86,6 @@ providers:
     options:
       path: /var/lib/grafana/dashboards
 EOF
-
-echo "  -> Datasource apuntando a http://${VM_BACK_IP}:8086 (org=${INFLUX_ORG}, bucket=${INFLUX_BUCKET})."
 
 echo "[5/6] Creando docker-compose.yml..."
 cat > "${WORK_DIR}/docker-compose.yml" << 'EOF'
@@ -121,7 +120,7 @@ volumes:
   grafana_data:
 EOF
 
-echo "[6/6] Levantando servicios con docker-compose..."
+echo "[6/6] Levantando servicios..."
 cd "${WORK_DIR}"
 docker-compose up -d
 

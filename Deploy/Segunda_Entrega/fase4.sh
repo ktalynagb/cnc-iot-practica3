@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fase 4 adaptada a bash para Cloud Shell
-# Requiere que existan:
-# - RG
-# - VNet
-# - Subredes
-# - NSGs
-
 RG_NAME="rg-cnc-iot"
 LOCATION="centralus"
 
 VNET_NAME="vnet-iot"
+VNET_PREFIX="10.0.0.0/16"
 PUBLIC_SUBNET_NAME="snet-public"
+PUBLIC_SUBNET_PREFIX="10.0.1.0/24"
 PRIVATE_SUBNET_NAME="snet-private"
+PRIVATE_SUBNET_PREFIX="10.0.2.0/24"
 
 NSG_PUBLIC_NAME="nsg-public"
 NSG_PRIVATE_NAME="nsg-private"
@@ -27,6 +23,8 @@ DNS_LABEL="cnc-iot-david"
 
 INFLUX_TOKEN="flux-cnc-iot-admin-token-2024"
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+trap 'echo "ERROR: el despliegue falló. Revisa el mensaje anterior." >&2' ERR
 
 echo "============================================================"
 echo " FASE 4: Creacion de VMs (sin cloud-init)"
