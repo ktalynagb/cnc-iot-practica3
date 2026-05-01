@@ -36,7 +36,7 @@ $NSG_PRIVATE_NAME     = "nsg-private"
 $VM_PUBLIC_NAME       = "vm-iot-front"
 $VM_PRIVATE_NAME      = "vm-iot-back"
 $VM_IMAGE             = "Ubuntu2204"
-$VM_SIZE              = "Standard_B1s"
+$VM_SIZE              = "Standard_D2s_v3"
 $ADMIN_USER           = "ubuntu"
 $DNS_LABEL            = "cnc-iot-david"
 
