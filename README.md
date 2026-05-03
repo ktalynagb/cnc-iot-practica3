@@ -217,15 +217,14 @@ Lectura completa — T=28.50°C  H=60.00%  Vib=0.9327 m/s²  Alerta=False
 
 ## Deploy en AWS (producción)
 
-### Puertos requeridos en Security Group
+### Puertos requeridos en Security Group / NSG
 
 | Puerto | Protocolo | Servicio |
 |--------|-----------|---------|
 | 22 | TCP | SSH |
 | 1883 | TCP | Mosquitto MQTT |
-| 8086 | TCP | InfluxDB |
 | 3000 | TCP | Grafana |
-| 8000 | TCP | FastAPI (opcional) |
+| 8000 | TCP | FastAPI Backend (CSV download) |
 
 ### 1. Clonar el repo en la VM
 
@@ -249,20 +248,26 @@ nano backend/.env
 curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 ```
 
-### 4. Instalar el bridge como servicio systemd con UV
-
-El bridge usa UV para gestionar sus dependencias. No necesita `uv.lock` previo; UV lo genera
-automáticamente la primera vez que arranca el servicio.
+### 4. Instalar el backend y el bridge como servicios systemd con UV
 
 ```bash
+# Bridge MQTT → InfluxDB + CSV
 sudo cp bridge/mqtt_bridge.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable mqtt_bridge
 sudo systemctl start mqtt_bridge
 
+# Backend FastAPI (GET /datos/ · GET /datos/descargar/)
+sudo cp backend/cnc_backend.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable cnc_backend
+sudo systemctl start cnc_backend
+
 # Verificar
 sudo systemctl status mqtt_bridge
+sudo systemctl status cnc_backend
 sudo journalctl -u mqtt_bridge -f
+sudo journalctl -u cnc_backend -f
 ```
 
 > El provisioning automatizado (`provision-front.sh`) realiza todos estos pasos sin intervención manual.
@@ -275,10 +280,19 @@ El CSV de todas las lecturas se puede descargar directamente desde el endpoint d
 GET http://<IP_PUBLICA>:8000/datos/descargar/
 ```
 
+Ejemplo con `curl`:
+
+```bash
+curl http://<IP_PUBLICA>:8000/datos/descargar/ -o lecturas.csv
+```
+
 El archivo se descarga con nombre `lecturas_cnc_<timestamp>.csv` y contiene todas las lecturas
 acumuladas por el bridge desde el inicio del servicio.
 
 El CSV se escribe en `/home/ubuntu/cnc-iot-backend/backend/data/lecturas.csv` en la VM pública.
+
+> El backend FastAPI corre como servicio `cnc_backend.service` en la VM pública (`vm-iot-front`).
+> Logs: `journalctl -u cnc_backend -f`
 
 ## Endpoints API REST (solo lectura)
 

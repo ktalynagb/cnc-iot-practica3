@@ -151,6 +151,21 @@ az network nsg rule create `
     --destination-port-ranges 3000 `
     --access             Allow `
     --output             none
+
+Write-Host "  Agregando regla Backend FastAPI (puerto 8000)..." -ForegroundColor Yellow
+az network nsg rule create `
+    --resource-group     $RG_NAME `
+    --nsg-name           $NSG_PUBLIC_NAME `
+    --name               "Allow-Backend" `
+    --priority           130 `
+    --protocol           Tcp `
+    --direction          Inbound `
+    --source-address-prefixes "*" `
+    --source-port-ranges "*" `
+    --destination-address-prefixes "*" `
+    --destination-port-ranges 8000 `
+    --access             Allow `
+    --output             none
 Write-Host "  -> Reglas del NSG publico configuradas." -ForegroundColor Green
 
 # Asociar NSG publico a la subred publica
@@ -336,6 +351,9 @@ Write-Host "    DNS         : $DNS_LABEL.$LOCATION.cloudapp.azure.com" -Foregrou
 Write-Host "    SSH         : ssh $ADMIN_USER@$VM_PUBLIC_IP" -ForegroundColor Green
 Write-Host "    MQTT        : $VM_PUBLIC_IP:1883  (flux_user / flux_pass)" -ForegroundColor Green
 Write-Host "    Grafana     : http://$VM_PUBLIC_IP:3000  (admin / admin123)" -ForegroundColor Green
+Write-Host "    Backend     : http://$VM_PUBLIC_IP:8000" -ForegroundColor Green
+Write-Host "    CSV DL      : http://$VM_PUBLIC_IP:8000/datos/descargar/" -ForegroundColor Green
+Write-Host "    API Docs    : http://$VM_PUBLIC_IP:8000/docs" -ForegroundColor Green
 Write-Host ""
 Write-Host "  VM Privada  ($VM_PRIVATE_NAME):" -ForegroundColor Green
 Write-Host "    IP Privada  : $VM_BACK_PRIVATE_IP" -ForegroundColor Green
