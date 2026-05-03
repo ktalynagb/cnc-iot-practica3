@@ -136,6 +136,21 @@ az network nsg rule create \
   --destination-port-ranges 3000 \
   --access Allow \
   --output none
+
+echo "Agregando regla Backend FastAPI (puerto 8000)..."
+az network nsg rule create \
+  --resource-group "$RG_NAME" \
+  --nsg-name "$NSG_PUBLIC_NAME" \
+  --name "Allow-Backend" \
+  --priority 130 \
+  --protocol Tcp \
+  --direction Inbound \
+  --source-address-prefixes "*" \
+  --source-port-ranges "*" \
+  --destination-address-prefixes "*" \
+  --destination-port-ranges 8000 \
+  --access Allow \
+  --output none
 echo "  -> Reglas del NSG publico configuradas."
 
 echo "Asociando NSG publico a la subred '${PUBLIC_SUBNET_NAME}'..."
@@ -264,6 +279,9 @@ echo "    DNS         : ${DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
 echo "    SSH         : ssh ${ADMIN_USER}@${VM_PUBLIC_IP}"
 echo "    MQTT        : ${VM_PUBLIC_IP}:1883  (flux_user / flux_pass)"
 echo "    Grafana     : http://${VM_PUBLIC_IP}:3000  (admin / admin123)"
+echo "    Backend     : http://${VM_PUBLIC_IP}:8000"
+echo "    CSV DL      : http://${VM_PUBLIC_IP}:8000/datos/descargar/"
+echo "    API Docs    : http://${VM_PUBLIC_IP}:8000/docs"
 echo ""
 echo "  VM Privada  (${VM_PRIVATE_NAME}):"
 echo "    IP Privada  : ${VM_BACK_PRIVATE_IP}"

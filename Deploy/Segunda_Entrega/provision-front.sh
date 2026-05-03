@@ -184,12 +184,19 @@ ENV_EOF
 chown ubuntu:ubuntu "${REPO_DIR}/backend/.env"
 echo "  -> backend/.env generado con IP de InfluxDB: ${VM_BACK_IP}"
 
-# Instalar y activar el servicio systemd
+# Instalar y activar el bridge como servicio systemd
 cp "${REPO_DIR}/bridge/mqtt_bridge.service" /etc/systemd/system/mqtt_bridge.service
 systemctl daemon-reload
 systemctl enable mqtt_bridge
 systemctl start mqtt_bridge
 echo "  -> Servicio mqtt_bridge instalado, habilitado e iniciado."
+
+# Instalar y activar el backend FastAPI como servicio systemd
+cp "${REPO_DIR}/backend/cnc_backend.service" /etc/systemd/system/cnc_backend.service
+systemctl daemon-reload
+systemctl enable cnc_backend
+systemctl start cnc_backend
+echo "  -> Servicio cnc_backend instalado, habilitado e iniciado."
 
 echo ""
 echo "================================================================"
@@ -208,4 +215,8 @@ echo "  Bridge    : mqtt_bridge.service (UV)"
 echo "    Repo    : ${REPO_DIR}"
 echo "    Logs    : journalctl -u mqtt_bridge -f"
 echo "    CSV     : ${REPO_DIR}/backend/data/lecturas.csv"
+echo "  Backend   : http://0.0.0.0:8000"
+echo "    Docs    : http://0.0.0.0:8000/docs"
+echo "    CSV DL  : http://0.0.0.0:8000/datos/descargar/"
+echo "    Logs    : journalctl -u cnc_backend -f"
 echo "================================================================"
