@@ -1,51 +1,48 @@
-//  CNC IoT - ESP32  |  Entrega 2 — MQTT
-//  Sensores : DHT11/22 (temperatura y humedad)  — GPIO0
-//             MPU-6050 (aceleración X/Y/Z)      — SDA=8, SCL=9
-//  Destino  : Broker Mosquitto en AWS vía MQTT
+// CNC IoT — ESP32-C3 | Práctica 3 — Azure IoT Hub (MQTTS, puerto 8883)
+// Sensores : DHT22 (temperatura y humedad) — GPIO0
+// Actuador : LED/relé                      — GPIO2
+// Sin MPU-6050 en esta entrega
 
 #include "credentials.h"
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <DHT.h>
-#include <Wire.h>
 
-//  DHT
-#define DHTPIN   0
-#define DHTTYPE  DHT22
+#define DHTPIN       0
+#define DHTTYPE      DHT22
+#define ACTUATOR_PIN 2
+#define MQTT_PORT    8883
+
+// Topics Azure IoT Hub
+#define TOPIC_TELEMETRY "devices/" DEVICE_ID "/messages/events/"
+#define TOPIC_COMMANDS  "devices/" DEVICE_ID "/messages/devicebound/#"
+
 DHT dht(DHTPIN, DHTTYPE);
+WiFiClientSecure tlsClient;
+PubSubClient mqtt(tlsClient);
 
-//  MPU-6050
-#define MPU_ADDR  0x68
-#define SDA_PIN   8
-#define SCL_PIN   9
-
-//  MQTT
-#define MQTT_PORT  1883
-
-WiFiClient wifiClient;
-PubSubClient mqtt(wifiClient);
-
-//  Intervalo
-const unsigned long INTERVALO_MS = 2000;
+const unsigned long INTERVALO_MS = 5000;
 unsigned long ultimoEnvio = 0;
-bool mpuOk = true;
 
 
-// Helpers MPU (lectura directa por I2C, sin librería externa)
+// Callback: comandos cloud-to-device desde el dashboard
 
-void mpuEscribir(byte reg, byte valor) {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(reg);
-  Wire.write(valor);
-  Wire.endTransmission();
-}
+void onCommand(char* topic, byte* payload, unsigned int length) {
+  String cmd = "";
+  for (unsigned int i = 0; i < length; i++) cmd += (char)payload[i];
+  cmd.trim();
+  Serial.printf("[CMD] Recibido: %s\n", cmd.c_str());
 
-int16_t mpuLeerInt16(byte reg) {
-  Wire.beginTransmission(MPU_ADDR);
-  Wire.write(reg);
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU_ADDR, 2);
-  return (Wire.read() << 8) | Wire.read();
+  if (cmd == "ON" || cmd == "on") {
+    digitalWrite(ACTUATOR_PIN, HIGH);
+    Serial.println("[ACT] Actuador ENCENDIDO");
+  } else if (cmd == "OFF" || cmd == "off") {
+    digitalWrite(ACTUATOR_PIN, LOW);
+    Serial.println("[ACT] Actuador APAGADO");
+  } else {
+    Serial.println("[ACT] Comando no reconocido");
+  }
 }
 
 
@@ -62,20 +59,30 @@ void conectarWiFi() {
 }
 
 
-// Conexión MQTT (con reintentos)
+// Conexión Azure IoT Hub via MQTTS con certificado X.509
 
-void conectarMQTT() {
-  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+void conectarAzureIoT() {
+  tlsClient.setCACert(AZURE_ROOT_CA);
+  tlsClient.setCertificate(DEVICE_CERT);
+  tlsClient.setPrivateKey(DEVICE_PRIVATE_KEY);
+
+  mqtt.setServer(IOT_HUB_HOST, MQTT_PORT);
+  mqtt.setCallback(onCommand);
+  mqtt.setBufferSize(512);
+
+  // Username requerido por Azure IoT Hub (contraseña vacía para auth X.509)
+  String username = String(IOT_HUB_HOST) + "/" + DEVICE_ID +
+                    "/?api-version=2021-04-12";
 
   while (!mqtt.connected()) {
-    Serial.printf("[MQTT] Conectando a %s...", MQTT_BROKER);
-    String clientId = "ESP32-CNC-" + WiFi.macAddress();
-
-    if (mqtt.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD)) {
+    Serial.printf("[MQTT] Conectando a %s...", IOT_HUB_HOST);
+    if (mqtt.connect(DEVICE_ID, username.c_str(), "")) {
       Serial.println(" OK");
+      mqtt.subscribe(TOPIC_COMMANDS);
+      Serial.printf("[MQTT] Suscrito a comandos C2D\n");
     } else {
-      Serial.printf(" Error rc=%d — reintentando en 3s\n", mqtt.state());
-      delay(3000);
+      Serial.printf(" Error rc=%d — reintentando en 5s\n", mqtt.state());
+      delay(5000);
     }
   }
 }
@@ -86,24 +93,16 @@ void conectarMQTT() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n=== CNC IoT ESP32 — Entrega 2 MQTT ===");
+  Serial.println("\n=== CNC IoT ESP32 — Práctica 3 Azure IoT Hub ===");
 
-  // DHT
+  pinMode(ACTUATOR_PIN, OUTPUT);
+  digitalWrite(ACTUATOR_PIN, LOW);
+
   dht.begin();
-  Serial.println("[DHT22] Iniciado en GPIO4");
+  Serial.println("[DHT22] Iniciado en GPIO0");
 
-  // MPU-6050
-  Wire.begin(SDA_PIN, SCL_PIN);
-  delay(100);
-  mpuEscribir(0x6B, 0x00);   // sacar del modo sleep
-  delay(100);
-  Serial.println("[MPU-6050] Iniciado en SDA=8 SCL=9");
-
-  // WiFi
   conectarWiFi();
-
-  // MQTT
-  conectarMQTT();
+  conectarAzureIoT();
 }
 
 
@@ -112,7 +111,7 @@ void setup() {
 void loop() {
   if (!mqtt.connected()) {
     Serial.println("[MQTT] Desconectado - reconectando...");
-    conectarMQTT();
+    conectarAzureIoT();
   }
   mqtt.loop();
 
@@ -120,8 +119,7 @@ void loop() {
   if (ahora - ultimoEnvio < INTERVALO_MS) return;
   ultimoEnvio = ahora;
 
-  // Leer DHT22
-  float humedad = dht.readHumidity();
+  float humedad     = dht.readHumidity();
   float temperatura = dht.readTemperature();
 
   if (isnan(humedad) || isnan(temperatura)) {
@@ -129,30 +127,15 @@ void loop() {
     return;
   }
 
-  // Leer MPU-6050
-  float accel_x = 0.0, accel_y = 0.0, accel_z = 0.0;
-  if (mpuOk) {
-    accel_x = (mpuLeerInt16(0x3B) / 16384.0) * 9.81;
-    accel_y = (mpuLeerInt16(0x3D) / 16384.0) * 9.81;
-    accel_z = (mpuLeerInt16(0x3F) / 16384.0) * 9.81;
-  } else {
-    Serial.println("[MPU-6050] No detectado - enviando ceros");
-  }
-
-  // Monitor serial
   Serial.println("------ Nueva lectura ------");
   Serial.printf("  Temperatura : %.2f °C\n", temperatura);
   Serial.printf("  Humedad     : %.2f %%\n", humedad);
-  Serial.printf("  Accel X     : %.4f m/s²\n", accel_x);
-  Serial.printf("  Accel Y     : %.4f m/s²\n", accel_y);
-  Serial.printf("  Accel Z     : %.4f m/s²\n", accel_z);
 
-  // Construir payload único
-  char payload[180];
+  char payload[96];
   snprintf(payload, sizeof(payload),
-           "{\"temperatura\":%.2f,\"humedad\":%.2f,\"accel_x\":%.4f,\"accel_y\":%.4f,\"accel_z\":%.4f}",
-           temperatura, humedad, accel_x, accel_y, accel_z);
+           "{\"temperatura\":%.2f,\"humedad\":%.2f}",
+           temperatura, humedad);
 
-  bool ok = mqtt.publish("flux/cnc1/datos", payload, true);
-  Serial.printf("[MQTT] flux/cnc1/datos → %s  %s\n", payload, ok ? "OK" : "ERROR");
+  bool ok = mqtt.publish(TOPIC_TELEMETRY, payload);
+  Serial.printf("[MQTT] → %s  %s\n", payload, ok ? "OK" : "ERROR");
 }
