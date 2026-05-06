@@ -5,9 +5,9 @@
 const char* WIFI_SSID     = "COWORKING";
 const char* WIFI_PASSWORD = "coworking2026..";
 
-// Azure IoT Hub — completar con los valores que entregue Ktalyna (BE-2)
-const char* IOT_HUB_HOST = "TU-HUB.azure-devices.net";   // ← reemplazar
-const char* DEVICE_ID    = "esp32-cnc1";                   // ← acordar con BE-2
+// Azure IoT Hub — completar con los valores que entregue Kta (BE-2)
+const char* IOT_HUB_HOST = "TU-HUB.azure-devices.net";   // reemplazar
+const char* DEVICE_ID    = "esp32-cnc1";                   // acordar con BE-2
 
 // CA raíz de Azure IoT Hub (DigiCert Global Root G2)
 // Referencia oficial: https://learn.microsoft.com/azure/iot-hub/reference-iot-hub-tls-support
