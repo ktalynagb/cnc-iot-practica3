@@ -85,12 +85,16 @@ ok "App settings configurados."
 
 # ── 3. Habilitar CORS en Function App ────────────────────────────────────────
 log "Configurando CORS en Function App..."
+# Si ya tenemos la URL del frontend, la usamos; de lo contrario usamos "*" como fallback
+# para que el dashboard pueda cargarse antes de conocer la URL definitiva.
+# Ejecutar 03_frontend_hosting.sh actualizará CORS con la URL real del frontend.
+CORS_ORIGIN="${FRONTEND_URL:-*}"
 az functionapp cors add \
   --name "$FUNC_APP_NAME" \
   --resource-group "$RG_NAME" \
-  --allowed-origins "*" \
+  --allowed-origins "$CORS_ORIGIN" \
   --output none
-ok "CORS configurado (permitir todos los orígenes)."
+ok "CORS configurado (origen: $CORS_ORIGIN)."
 
 # ── 4. Publicar código con func CLI ──────────────────────────────────────────
 log "Publicando código desde '$FUNC_SRC'..."

@@ -60,7 +60,9 @@ cp -r "$FRONTEND_SRC"/. "$TMP_FRONTEND/"
 # Sustituir placeholder de API_BASE_URL en app.js si existe FUNC_BASE_URL
 if [[ -n "${FUNC_BASE_URL:-}" ]]; then
   log "Inyectando API_BASE_URL='${FUNC_BASE_URL}' en app.js..."
-  sed -i "s|__API_BASE_URL__|${FUNC_BASE_URL}|g" "$TMP_FRONTEND/app.js"
+  # Portable: escribe a un archivo temporal y mueve (evita diferencias sed -i en macOS vs Linux)
+  sed "s|__API_BASE_URL__|${FUNC_BASE_URL}|g" "$TMP_FRONTEND/app.js" > "$TMP_FRONTEND/app.js.tmp"
+  mv "$TMP_FRONTEND/app.js.tmp" "$TMP_FRONTEND/app.js"
   ok "URL del backend inyectada en app.js."
 else
   warn "FUNC_BASE_URL no definida. Ejecuta 02_backend.sh antes de este script para inyectar la URL automáticamente."
@@ -92,6 +94,25 @@ FRONTEND_URL=$(az storage account show \
   echo "FRONTEND_URL=\"${FRONTEND_URL}\""
 } > "$ENV_FILE"
 rm -f "$ENV_FILE.tmp"
+
+# ── 5. Restringir CORS de la Function App a la URL del frontend ───────────────
+if [[ -n "${FUNC_APP_NAME:-}" ]]; then
+  log "Actualizando CORS de la Function App con la URL del frontend..."
+  # Eliminar el wildcard si estaba configurado como fallback inicial
+  az functionapp cors remove \
+    --name "$FUNC_APP_NAME" \
+    --resource-group "$RG_NAME" \
+    --allowed-origins "*" \
+    --output none 2>/dev/null || true
+  az functionapp cors add \
+    --name "$FUNC_APP_NAME" \
+    --resource-group "$RG_NAME" \
+    --allowed-origins "${FRONTEND_URL%/}" \
+    --output none
+  ok "CORS de Function App restringido a: ${FRONTEND_URL%/}"
+else
+  warn "FUNC_APP_NAME no definido — CORS no actualizado. Edita manualmente el CORS de la Function App."
+fi
 
 ok "Dashboard disponible en: $FRONTEND_URL"
 log "============================================================"
