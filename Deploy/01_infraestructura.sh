@@ -27,8 +27,8 @@ COSMOS_CONTAINER="lecturas"
 IOT_DEVICE_ID="esp32-cnc1"
 
 # Nombres de storage accounts (3-24 chars, solo minúsculas y números)
-FUNC_STORAGE="${FUNC_STORAGE:-cnciotfunc$(head -c4 /dev/urandom | xxd -p)}"
-FRONTEND_SA="${FRONTEND_SA:-cnciotfront$(head -c4 /dev/urandom | xxd -p)}"
+FUNC_STORAGE="${FUNC_STORAGE:-cnciotfunc$(openssl rand -hex 4)}"
+FRONTEND_SA="${FRONTEND_SA:-cnciotfront$(openssl rand -hex 4)}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 log()  { echo "[01_infra] $*"; }
