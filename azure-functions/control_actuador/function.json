@@ -7,7 +7,7 @@
       "name": "req",
       "methods": ["POST", "OPTIONS"],
       "authLevel": "anonymous",
-      "route": "datos"
+      "route": "actuador"
     },
     {
       "type": "http",

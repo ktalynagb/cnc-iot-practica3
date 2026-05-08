@@ -7,7 +7,7 @@
       "name": "req",
       "methods": ["GET", "OPTIONS"],
       "authLevel": "anonymous",
-      "route": "datos"
+      "route": "datos/csv"
     },
     {
       "type": "http",
