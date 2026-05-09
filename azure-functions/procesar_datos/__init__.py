@@ -19,6 +19,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from typing import List
 
 import azure.functions as func
 from azure.cosmos import CosmosClient
@@ -27,7 +28,7 @@ from azure.cosmos import CosmosClient
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "shared"))
 from alertas import calcular_vibracion, evaluar_alerta
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────
 COSMOS_CONN   = os.getenv("COSMOS_CONNECTION_STRING", "")
 COSMOS_DB     = os.getenv("COSMOS_DATABASE", "cnc_iot")
 COSMOS_CONT   = os.getenv("COSMOS_CONTAINER", "lecturas")
@@ -35,7 +36,7 @@ COSMOS_CONT   = os.getenv("COSMOS_CONTAINER", "lecturas")
 log = logging.getLogger("procesar_datos")
 
 
-def main(events: list[func.EventHubEvent]) -> None:
+def main(events: List[func.EventHubEvent]) -> None:
     """
     Se ejecuta por cada lote de mensajes que llega al IoT Hub.
     Azure puede agrupar varios mensajes en un solo lote.
