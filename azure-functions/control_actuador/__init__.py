@@ -7,9 +7,9 @@ Trigger: HTTP POST /api/actuador
 Body:    {"dispositivo": "cnc1", "comando": "ON"} o {"comando": "OFF"}
 Acción:  Intenta invoke_device_method; si falla, fallback a C2D (enviar texto plano).
          Si el envío C2D por la SDK falla, se intenta un fallback HTTP (REST) contra el IoT Hub.
-Variables de entorno requeridas:
-  IOTHUB_SERVICE_CONNECTION_STRING — connection string con permisos ServiceConnect
-  IOT_DEVICE_ID                    — ID del dispositivo registrado en IoT Hub
+
+Hotfix aplicado: forzar el device id configurado en la app setting IOT_DEVICE_ID
+                 (evita problemas cuando el frontend envía "cnc1" en vez del device real).
 """
 import base64
 import hmac
@@ -32,27 +32,25 @@ log = logging.getLogger("control_actuador")
 
 COMANDOS_VALIDOS = {"ON", "OFF", "RESET"}
 
+# Optional alias map (if you later want to accept friendly names)
+ALIAS_MAP = {
+    "cnc1": "esp32-cnc1",
+}
+
 
 def _parse_connection_string(conn_str: str):
-    """
-    Parse an IoT Hub connection string into a dict with keys HostName, SharedAccessKeyName, SharedAccessKey
-    """
     parts = dict(kv.split("=", 1) for kv in conn_str.split(";") if "=" in kv)
     return parts
 
 
 def _build_sas_token(hostname: str, key_name: str, key: str, target: str, ttl: int = 60 * 60):
-    """
-    Build a SharedAccessSignature token for the given target resource.
-    target should be the resource URI (e.g. "<host>/devices/<deviceId>/messages/deviceBound")
-    """
     expiry = int(time.time()) + ttl
-    sr = urllib.parse.quote_plus(target)
     sign_target = f"{target}\n{expiry}"
     key_bytes = base64.b64decode(key)
     signature = hmac.new(key_bytes, sign_target.encode("utf-8"), hashlib.sha256).digest()
-    sig = urllib.parse.quote_plus(base64.b64encode(signature))
-    # if key_name is empty, omit skn parameter
+    sig_b64 = base64.b64encode(signature).decode("utf-8")
+    sig = urllib.parse.quote_plus(sig_b64)
+    sr = urllib.parse.quote_plus(target)
     if key_name:
         token = f"SharedAccessSignature sr={sr}&sig={sig}&se={expiry}&skn={urllib.parse.quote_plus(key_name)}"
     else:
@@ -61,10 +59,6 @@ def _build_sas_token(hostname: str, key_name: str, key: str, target: str, ttl: i
 
 
 def _send_c2d_rest(conn_str: str, device_id: str, payload: str, timeout: int = 10):
-    """
-    Send a C2D message using the IoT Hub service REST API as a fallback.
-    Returns True on success, False otherwise (and logs details).
-    """
     try:
         parts = _parse_connection_string(conn_str)
         host = parts.get("HostName")
@@ -74,15 +68,14 @@ def _send_c2d_rest(conn_str: str, device_id: str, payload: str, timeout: int = 1
             log.error("REST fallback: connection string missing HostName or SharedAccessKey")
             return False
 
-        # Resource target for SAS (unencoded)
-        resource_uri = f"{host}/devices/{device_id}/messages/deviceBound"
+        # resource for signing: "<host>/devices/<deviceId>"
+        resource_uri = f"{host}/devices/{device_id}"
         sas = _build_sas_token(host, key_name, key, resource_uri)
 
         url = f"https://{host}/devices/{urllib.parse.quote(device_id)}/messages/deviceBound?api-version=2020-09-30"
         data = payload.encode("utf-8")
         req = urllib.request.Request(url, data=data, method="POST")
         req.add_header("Authorization", sas)
-        # Prefer plain text payload for simplicity
         req.add_header("Content-Type", "text/plain; charset=utf-8")
         req.add_header("Content-Length", str(len(data)))
 
@@ -90,8 +83,10 @@ def _send_c2d_rest(conn_str: str, device_id: str, payload: str, timeout: int = 1
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status = resp.getcode()
             log.info("REST fallback: response status=%s", status)
-            # IoT Hub returns 204 No Content on success for C2D REST
             return status in (200, 201, 202, 204)
+    except urllib.error.HTTPError as he:
+        log.error("REST fallback HTTPError: %s", he)
+        return False
     except Exception as e:
         log.exception("REST fallback send failed: %s", e)
         return False
@@ -124,7 +119,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         body = {}
 
     comando = str(body.get("comando", "")).upper()
+    # read device id from request or fallback to configured device id
     device_id = body.get("dispositivo", IOT_DEVICE_ID)
+
+    # apply alias map if present
+    device_id = ALIAS_MAP.get(device_id, device_id)
+
+    # HOTFIX: force configured device id to avoid mismatches from frontend
+    if device_id != IOT_DEVICE_ID:
+        log.warning("Hotfix: forcing device_id from configured IOT_DEVICE_ID (%s). Request asked for '%s'", IOT_DEVICE_ID, device_id)
+        device_id = IOT_DEVICE_ID
 
     if comando not in COMANDOS_VALIDOS:
         return _respond_json({"error": f"Comando inválido. Válidos: {COMANDOS_VALIDOS}"}, status_code=400)
@@ -132,12 +136,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     if not IOTHUB_SERVICE_CONN:
         return _respond_json({"error": "IOTHUB_SERVICE_CONNECTION_STRING no configurada"}, status_code=500)
 
-    # Instrumentación mínima: confirmar que la Function ve la connstring (pero sin imprimirla)
-    log.info(
-        "control_actuador: device_id=%s len(IOTHUB_SERVICE_CONNECTION_STRING)=%d",
-        device_id,
-        len(IOTHUB_SERVICE_CONN or ""),
-    )
+    # Instrumentation: minimal info (no secrets)
+    log.info("control_actuador: using device_id=%s len(IOTHUB_SERVICE_CONNECTION_STRING)=%d", device_id, len(IOTHUB_SERVICE_CONN or ""))
 
     try:
         registry = IoTHubRegistryManager.from_connection_string(IOTHUB_SERVICE_CONN)
@@ -145,7 +145,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         log.exception("No se pudo crear IoTHubRegistryManager")
         return _respond_json({"error": str(e)}, status_code=500)
 
-    # 1) Intentar método directo (invoke), útil si el dispositivo lo implementa y está en línea.
+    # 1) Try direct method
     try:
         method = CloudToDeviceMethod(method_name="actuador", payload={"comando": comando})
         result = registry.invoke_device_method(device_id, method)
@@ -157,16 +157,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as ex:
         log.warning("invoke_device_method falló (se usará C2D): %s", ex)
 
-    # 2) Fallback: enviar Cloud-to-Device (C2D) usando la SDK (payload como texto plano)
+    # 2) Fallback: SDK C2D (plain text)
     try:
-        payload = comando  # enviar texto plano: "ON" / "OFF" / "RESET"
+        payload = comando
         log.info("Attempting SDK C2D send to device=%s payload=%s", device_id, payload)
         registry.send_c2d_message(device_id, payload)
         log.info("C2D (SDK) encolado device=%s comando=%s", device_id, comando)
         return _respond_json({"ok": True, "delivered": "c2d", "queued": True}, status_code=200)
     except Exception as e:
         log.exception("send_c2d_message (SDK) falló: %s", e)
-        # intentar fallback REST
+        # REST fallback
         try:
             log.info("Intentando fallback REST para enviar C2D...")
             ok_rest = _send_c2d_rest(IOTHUB_SERVICE_CONN, device_id, payload)

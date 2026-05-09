@@ -2,8 +2,8 @@
 #define CREDENTIALS_H
 
 // WiFi
-const char* WIFI_SSID     = "ADMINISTRACION";
-const char* WIFI_PASSWORD = "administracion2026.";
+const char* WIFI_SSID     = "COWORKING";
+const char* WIFI_PASSWORD = "coworking2026..";
 
 // Azure IoT Hub — completar con los valores que entregue Kta (BE-2)
 const char* IOT_HUB_HOST = "cnc-iot-hub.azure-devices.net";   // reemplazar
