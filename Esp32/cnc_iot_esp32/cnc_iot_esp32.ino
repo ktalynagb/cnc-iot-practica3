@@ -1,7 +1,7 @@
-// CNC IoT — ESP32-C3 | Práctica 3 — Azure IoT Hub (MQTTS, puerto 8883)
+// CNC IoT — ESP32 Entrega 3 | Azure IoT Hub (MQTTS, puerto 8883)
+// Soporta: C2D (devicebound) + Direct Methods ($iothub/methods)
 // Sensores : DHT22 (temperatura y humedad) — GPIO0
-// Actuador : LED/relé                      — GPIO2
-// Implementa: generación on-device de SAS token (HMAC-SHA256 + base64) y renovación NTP
+// Actuador : LED/relé                      — GPIO2 (ajusta si usas otro pin)
 
 #include "credentials.h"
 #include <WiFi.h>
@@ -16,13 +16,16 @@
 
 #define DHTPIN       0
 #define DHTTYPE      DHT22
+// Cambia este pin si tu placa usa otro (GPIO2 es típico). En tu código anterior estaba 10; ajústalo aquí si lo necesitas.
 #define ACTUATOR_PIN 10
 #define MQTT_PORT    8883
 
-// Los topics se generan en runtime porque DEVICE_ID es const char*
+// Topics generados en runtime (DEVICE_ID viene de credentials.h como const char*)
 String TOPIC_TELEMETRY;
 String TOPIC_COMMANDS;
+const char* TOPIC_METHODS_SUB = "$iothub/methods/POST/#";
 
+// Helpers
 DHT dht(DHTPIN, DHTTYPE);
 WiFiClientSecure tlsClient;
 PubSubClient mqtt(tlsClient);
@@ -43,23 +46,173 @@ String createSasToken(const char* host, const char* deviceId, const char* primar
 void conectarAzureIoT();
 void ensureSasAndConnection();
 void publishTelemetry(float temperatura, float humedad);
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+String parseCommandFromPayload(const String &payload);
+void handleDirectMethod(const char* topic, const String &payload);
+void sendMethodResponse(const String &rid, int status, const String &body);
 
-// Callback: comandos cloud-to-device desde el dashboard
-void onCommand(char* topic, byte* payload, unsigned int length) {
-  String cmd = "";
-  for (unsigned int i = 0; i < length; i++) cmd += (char)payload[i];
-  cmd.trim();
-  Serial.printf("[CMD] Recibido en topic %s: %s\n", topic, cmd.c_str());
+// --- Implementación ---
 
-  if (cmd == "ON" || cmd == "on") {
-    digitalWrite(ACTUATOR_PIN, HIGH);
-    Serial.println("[ACT] Actuador ENCENDIDO");
-  } else if (cmd == "OFF" || cmd == "off") {
-    digitalWrite(ACTUATOR_PIN, LOW);
-    Serial.println("[ACT] Actuador APAGADO");
-  } else {
-    Serial.println("[ACT] Comando no reconocido");
+// Extrae valor "comando" desde JSON sencillo o usa texto plano
+String parseCommandFromPayload(const String &payload) {
+  String s = payload;
+  s.trim();
+  if (s.length() == 0) return "";
+
+  // Si parece JSON, buscar "comando": "VALUE"
+  if (s.charAt(0) == '{') {
+    int idx = s.indexOf("\"comando\"");
+    if (idx >= 0) {
+      int colon = s.indexOf(':', idx);
+      if (colon >= 0) {
+        // buscar primera comilla después del colon
+        int q1 = s.indexOf('"', colon);
+        if (q1 >= 0) {
+          int q2 = s.indexOf('"', q1 + 1);
+          if (q2 > q1) {
+            return s.substring(q1 + 1, q2);
+          }
+        }
+        // si valor no entre comillas, extraer token sin espacios/comas
+        int start = colon + 1;
+        while (start < s.length() && isSpace(s.charAt(start))) start++;
+        int end = start;
+        while (end < s.length() && s.charAt(end) != ',' && s.charAt(end) != '}' && !isSpace(s.charAt(end))) end++;
+        return s.substring(start, end);
+      }
+    }
+    // no se encontró, devolver cadena completa
+    return s;
   }
+  // no es JSON: devolver tal cual
+  return s;
+}
+
+// Maneja métodos directos: topic = $iothub/methods/POST/{method_name}/?$rid={rid}
+void handleDirectMethod(const char* topic, const String &payload) {
+  String t = String(topic);
+  // extraer method_name y rid
+  // formato: $iothub/methods/POST/actuador/?$rid=1
+  // o $iothub/methods/POST/actuador/?$rid=1234
+  int p1 = t.indexOf("/POST/");
+  if (p1 < 0) {
+    Serial.printf("[METHOD] Topic inesperado: %s\n", topic);
+    return;
+  }
+  int startMethod = p1 + 6;
+  int qmark = t.indexOf("/?", startMethod);
+  if (qmark < 0) qmark = t.indexOf('?', startMethod);
+  String methodName;
+  String rid;
+  if (qmark > startMethod) {
+    methodName = t.substring(startMethod, qmark);
+    int ridIdx = t.indexOf("$rid=", qmark);
+    if (ridIdx >= 0) {
+      rid = t.substring(ridIdx + 5);
+      // si hay otros params, tomar hasta &
+      int amp = rid.indexOf('&');
+      if (amp >= 0) rid = rid.substring(0, amp);
+    }
+  } else {
+    methodName = t.substring(startMethod);
+  }
+
+  methodName.trim();
+  rid.trim();
+
+  Serial.printf("[METHOD] recibido method='%s' rid='%s' payload=%s\n", methodName.c_str(), rid.c_str(), payload.c_str());
+
+  // por ahora soporte solo "actuador"
+  if (methodName == "actuador") {
+    String cmd = parseCommandFromPayload(payload);
+    cmd.trim();
+    cmd.toUpperCase();
+
+    if (cmd == "ON") {
+      digitalWrite(ACTUATOR_PIN, HIGH);
+      Serial.println("[ACT] Actuador ENCENDIDO (method)");
+      // responder status 200 con body opcional
+      sendMethodResponse(rid, 200, "{\"result\":\"OK\",\"comando\":\"ON\"}");
+      return;
+    } else if (cmd == "OFF") {
+      digitalWrite(ACTUATOR_PIN, LOW);
+      Serial.println("[ACT] Actuador APAGADO (method)");
+      sendMethodResponse(rid, 200, "{\"result\":\"OK\",\"comando\":\"OFF\"}");
+      return;
+    } else if (cmd == "RESET") {
+      digitalWrite(ACTUATOR_PIN, LOW);
+      delay(100);
+      digitalWrite(ACTUATOR_PIN, HIGH);
+      delay(100);
+      digitalWrite(ACTUATOR_PIN, LOW);
+      Serial.println("[ACT] Actuador RESET (method)");
+      sendMethodResponse(rid, 200, "{\"result\":\"OK\",\"comando\":\"RESET\"}");
+      return;
+    } else {
+      Serial.println("[METHOD] comando no reconocido");
+      sendMethodResponse(rid, 404, "{\"error\":\"Comando no reconocido\"}");
+      return;
+    }
+  } else {
+    Serial.println("[METHOD] method no soportado");
+    sendMethodResponse(rid, 404, "{\"error\":\"Method not supported\"}");
+  }
+}
+
+void sendMethodResponse(const String &rid, int status, const String &body) {
+  if (rid.length() == 0) {
+    Serial.println("[METHOD] No rid, no se puede responder");
+    return;
+  }
+  String topicRes = String("$iothub/methods/res/") + String(status) + "/?$rid=" + rid;
+  bool ok = mqtt.publish(topicRes.c_str(), body.c_str());
+  Serial.printf("[METHOD] Respondido topic=%s status=%d ok=%d body=%s\n", topicRes.c_str(), status, ok, body.c_str());
+}
+
+// Callback MQTT: manejar devicebound y methods
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String t = String(topic);
+  String pl = "";
+  for (unsigned int i = 0; i < length; i++) pl += (char)payload[i];
+  pl.trim();
+
+  Serial.printf("[MQTT] Mensaje en topic: %s\n  payload: %s\n", topic, pl.c_str());
+
+  // Direct Methods
+  if (t.startsWith("$iothub/methods/POST/")) {
+    handleDirectMethod(topic, pl);
+    return;
+  }
+
+  // Cloud-to-Device (devicebound) — payload puede ser JSON o texto
+  // topic example: devices/{deviceId}/messages/devicebound/#
+  if (t.indexOf("/messages/devicebound/") >= 0) {
+    // parsear
+    String cmd = parseCommandFromPayload(pl);
+    cmd.trim();
+    cmd.toUpperCase();
+
+    if (cmd == "ON") {
+      digitalWrite(ACTUATOR_PIN, HIGH);
+      Serial.println("[ACT] Actuador ENCENDIDO (C2D)");
+    } else if (cmd == "OFF") {
+      digitalWrite(ACTUATOR_PIN, LOW);
+      Serial.println("[ACT] Actuador APAGADO (C2D)");
+    } else if (cmd == "RESET") {
+      digitalWrite(ACTUATOR_PIN, LOW);
+      delay(100);
+      digitalWrite(ACTUATOR_PIN, HIGH);
+      delay(100);
+      digitalWrite(ACTUATOR_PIN, LOW);
+      Serial.println("[ACT] Actuador RESET (C2D)");
+    } else {
+      Serial.println("[ACT] Comando C2D no reconocido");
+    }
+    return;
+  }
+
+  // Otros topics (telemetry ack u otros) — ignora
+  Serial.println("[MQTT] Topic no gestionado");
 }
 
 // Conexión WiFi
@@ -165,49 +318,16 @@ String createSasToken(const char* host, const char* deviceId, const char* primar
   return token;
 }
 
-// Connect to Azure IoT Hub using SAS token as password
+// Conectar a Azure IoT Hub (MQTT sobre TLS)
 void conectarAzureIoT() {
-  // DEBUG: probar TLS connect con CA configurada
-  {
-    WiFiClientSecure testClient;
-    testClient.setCACert(AZURE_ROOT_CA);
-    Serial.println("[DEBUG] Probando TLS connect (con CA)...");
-    if (!testClient.connect(IOT_HUB_HOST, MQTT_PORT)) {
-      Serial.println("[DEBUG] TLS connect FAILED (con CA)");
-    } else {
-      Serial.println("[DEBUG] TLS connect OK (con CA)");
-      testClient.stop();
-    }
-  }
-
-  // DEBUG: probar TLS connect sin validar (solo para aislar CA vs red). BORRAR/COMENTAR en producción.
-  {
-    WiFiClientSecure testClient2;
-    testClient2.setInsecure();
-    Serial.println("[DEBUG] Probando TLS connect (insecure)...");
-    if (!testClient2.connect(IOT_HUB_HOST, MQTT_PORT)) {
-      Serial.println("[DEBUG] TLS connect FAILED (insecure) — problema de red/DNS/puerto");
-    } else {
-      Serial.println("[DEBUG] TLS connect OK (insecure)");
-      testClient2.stop();
-    }
-  }
-
-  // DEBUG: imprime time() para confirmar NTP
-  Serial.printf("[DEBUG] time() = %lu\n", (unsigned long)time(NULL));
-
-  // Generar SAS y username (imprimir solo longitud/prefijo)
-  String sas = createSasToken(IOT_HUB_HOST, DEVICE_ID, DEVICE_PRIMARY_KEY, SAS_TTL);
-  Serial.printf("[DEBUG] SAS length: %u, startsWith: %.20s\n", (unsigned)sas.length(), sas.c_str());
-  String username = String(IOT_HUB_HOST) + "/" + DEVICE_ID + "/?api-version=2021-04-12";
-  Serial.println("[DEBUG] username: " + username);
-
-  // Configurar cliente MQTT real
   tlsClient.setCACert(AZURE_ROOT_CA);
   mqtt.setServer(IOT_HUB_HOST, MQTT_PORT);
-  mqtt.setCallback(onCommand);
-  mqtt.setBufferSize(512);
+  mqtt.setCallback(mqttCallback);
+  mqtt.setBufferSize(1024); // aumentar buffer para topics largos
 
+  String username = String(IOT_HUB_HOST) + "/" + DEVICE_ID + "/?api-version=2021-04-12";
+
+  String sas = createSasToken(IOT_HUB_HOST, DEVICE_ID, DEVICE_PRIMARY_KEY, SAS_TTL);
   if (sas == "") {
     Serial.println("[MQTT] No se pudo generar SAS token");
     delay(5000);
@@ -218,10 +338,16 @@ void conectarAzureIoT() {
   Serial.printf("[MQTT] Conectando a %s con SAS (expira en %lus)...\n", IOT_HUB_HOST, SAS_TTL);
   if (mqtt.connect(DEVICE_ID, username.c_str(), sas.c_str())) {
     Serial.println("[MQTT] Conectado OK");
+    // Suscripciones necesarias:
     if (mqtt.subscribe(TOPIC_COMMANDS.c_str())) {
       Serial.println("[MQTT] Suscrito a comandos C2D");
     } else {
-      Serial.println("[MQTT] Suscripcion a comandos fallida");
+      Serial.println("[MQTT] Suscripcion a comandos C2D fallida");
+    }
+    if (mqtt.subscribe(TOPIC_METHODS_SUB)) {
+      Serial.println("[MQTT] Suscrito a Direct Methods");
+    } else {
+      Serial.println("[MQTT] Suscripcion a Direct Methods fallida");
     }
   } else {
     Serial.printf("[MQTT] Error conectando, rc=%d\n", mqtt.state());
@@ -246,7 +372,7 @@ void ensureSasAndConnection() {
 
 // Publish telemetry helper
 void publishTelemetry(float temperatura, float humedad) {
-  char payload[128];
+  char payload[160];
   snprintf(payload, sizeof(payload),
            "{\"temperatura\":%.2f,\"humedad\":%.2f}",
            temperatura, humedad);
@@ -258,13 +384,13 @@ void publishTelemetry(float temperatura, float humedad) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n=== CNC IoT ESP32 — Práctica 3 Azure IoT Hub (SAS) ===");
+  Serial.println("\n=== CNC IoT ESP32 — Azure IoT Hub (SAS) ===");
 
   pinMode(ACTUATOR_PIN, OUTPUT);
   digitalWrite(ACTUATOR_PIN, LOW);
 
   dht.begin();
-  Serial.println("[DHT22] Iniciado en GPIO0");
+  Serial.println("[DHT22] Iniciado");
 
   // Construir topics en runtime usando DEVICE_ID (const char*)
   TOPIC_TELEMETRY = String("devices/") + String(DEVICE_ID) + "/messages/events/";
